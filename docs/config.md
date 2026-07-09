@@ -25,6 +25,13 @@ providers:
     enabled: false
     api_key: "plain-text-api-key"
 
+  zep:
+    type: zep
+    enabled: false
+    api_key: "plain-text-zep-api-key"
+    user_id: todd
+    search_scope: episodes
+
 recall_profiles:
   default:
     providers:
@@ -76,10 +83,16 @@ Fields:
 - `enabled`: whether this provider can be used by profiles.
 - `path`: local provider JSONL path.
 - `api_key`: optional plain-text API key for remote providers.
+- `base_url`: optional remote provider API base URL override.
+- `user_id`: Zep user graph target.
+- `graph_id`: Zep named graph target.
+- `search_scope`: Zep graph search scope. Supported values are `episodes`,
+  `edges`, `nodes`, `observations`, `thread_summaries`, and `auto`.
+- `max_characters`: optional Zep auto-scope context character limit.
+- `source_description`: optional Zep source description for writes.
 
-V1 ships with the `local` provider. Additional provider config fields are
-accepted so setup and docs can model future remote providers before adapters
-exist.
+V1 ships with `local` and `zep` provider adapters. Zep requires `api_key` and
+exactly one of `user_id` or `graph_id`.
 
 ## Recall Profiles
 

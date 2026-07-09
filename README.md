@@ -64,6 +64,13 @@ providers:
     enabled: true
     path: ~/.local/share/paxm/memory.jsonl
 
+  zep:
+    type: zep
+    enabled: false
+    api_key: "plain-text-zep-api-key"
+    user_id: todd
+    search_scope: episodes
+
 recall_profiles:
   default:
     providers:
@@ -111,8 +118,9 @@ thresholds are applied. Write profiles decide which providers are written.
 Optional provider failures are returned as provider errors; required provider
 failures fail the command.
 
-Remote provider configs may include a plain-text `api_key` field. The current
-V1 implementation only ships the `local` provider adapter.
+Remote provider configs may include a plain-text `api_key` field. Zep is
+supported with `type: zep` using `github.com/getzep/zep-go/v3`; configure
+exactly one of `user_id` or `graph_id`.
 
 `paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers Codex hooks in the user-level Codex config.
 

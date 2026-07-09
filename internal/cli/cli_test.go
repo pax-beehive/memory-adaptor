@@ -97,6 +97,41 @@ func TestCLISetupInteractiveProviderChoices(t *testing.T) {
 	assertWriteOnlyConfig(t, configPath)
 }
 
+func TestCLISetupInteractiveZepProvider(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	setupInput := strings.NewReader("2\nzep-key\n2\ngraph-1\nedges\n1\n2\nnone\n")
+	if code := Main([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers["local"].Enabled {
+		t.Fatalf("local should be disabled when only zep was selected: %#v", cfg.Providers)
+	}
+	zep := cfg.Providers["zep"]
+	if !zep.Enabled || zep.APIKey != "zep-key" || zep.GraphID != "graph-1" || zep.UserID != "" || zep.SearchScope != "edges" {
+		t.Fatalf("unexpected zep provider config: %#v", zep)
+	}
+	recallRoutes := cfg.RecallProfiles["default"].Providers
+	if len(recallRoutes) != 1 || recallRoutes[0].Name != "zep" || recallRoutes[0].Required {
+		t.Fatalf("unexpected recall routes: %#v", recallRoutes)
+	}
+	writeRoutes := cfg.WriteProfiles["default"].Providers
+	if len(writeRoutes) != 1 || writeRoutes[0].Name != "zep" || writeRoutes[0].Required {
+		t.Fatalf("unexpected write routes: %#v", writeRoutes)
+	}
+	if strings.Contains(stdout.String(), "installed hook shim") {
+		t.Fatalf("setup installed hook despite none selection: %s", stdout.String())
+	}
+}
+
 func TestCLISetupRequiresAProvider(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))

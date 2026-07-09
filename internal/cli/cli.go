@@ -120,23 +120,65 @@ func (r runner) runSetup(args []string) error {
 			if err != nil {
 				return err
 			}
-			mode, err := promptSingleSelect(promptReader, r.stdout, "Local provider mode", []setupOption{
-				{ID: "read_write", Label: "read and write"},
-				{ID: "read_only", Label: "read only"},
-				{ID: "write_only", Label: "write only"},
-			}, currentProviderMode(cfg, "local"))
-			if err != nil {
-				return err
-			}
-			policy, err := promptSingleSelect(promptReader, r.stdout, "Local provider failure policy", []setupOption{
-				{ID: "required", Label: "required"},
-				{ID: "best_effort", Label: "best effort"},
-			}, currentProviderPolicy(cfg, "local"))
-			if err != nil {
-				return err
-			}
 			cfg.Providers["local"] = local
-			setDefaultProviderMode(&cfg, "local", mode, policy == "required")
+			if err := promptProviderRouting(promptReader, r.stdout, &cfg, "local", "Local"); err != nil {
+				return err
+			}
+		}
+		if selectedProviders["zep"] {
+			zep := cfg.Providers["zep"]
+			zep.APIKey, err = promptString(promptReader, r.stdout, "Zep API key", zep.APIKey)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(zep.APIKey) == "" {
+				return errors.New("zep setup requires an API key")
+			}
+			targetDefault := "user"
+			if zep.GraphID != "" {
+				targetDefault = "graph"
+			}
+			target, err := promptSingleSelect(promptReader, r.stdout, "Zep memory target", []setupOption{
+				{ID: "user", Label: "user graph"},
+				{ID: "graph", Label: "named graph"},
+			}, targetDefault)
+			if err != nil {
+				return err
+			}
+			if target == "user" {
+				zep.UserID, err = promptString(promptReader, r.stdout, "Zep user ID", zep.UserID)
+				if err != nil {
+					return err
+				}
+				zep.GraphID = ""
+				if strings.TrimSpace(zep.UserID) == "" {
+					return errors.New("zep setup requires a user ID")
+				}
+			} else {
+				zep.GraphID, err = promptString(promptReader, r.stdout, "Zep graph ID", zep.GraphID)
+				if err != nil {
+					return err
+				}
+				zep.UserID = ""
+				if strings.TrimSpace(zep.GraphID) == "" {
+					return errors.New("zep setup requires a graph ID")
+				}
+			}
+			zep.SearchScope, err = promptSingleSelect(promptReader, r.stdout, "Zep search scope", []setupOption{
+				{ID: "episodes", Label: "episodes"},
+				{ID: "edges", Label: "edges"},
+				{ID: "nodes", Label: "nodes"},
+				{ID: "observations", Label: "observations"},
+				{ID: "thread_summaries", Label: "thread summaries"},
+				{ID: "auto", Label: "auto"},
+			}, firstNonEmpty(zep.SearchScope, "episodes"))
+			if err != nil {
+				return err
+			}
+			cfg.Providers["zep"] = zep
+			if err := promptProviderRouting(promptReader, r.stdout, &cfg, "zep", "Zep"); err != nil {
+				return err
+			}
 		}
 		selectedHooks, err = promptMultiSelect(promptReader, r.stdout, "Select agent hooks to install", hookOptions(cfg), selectedHooks)
 		if err != nil {
@@ -466,6 +508,26 @@ func cfgHookEnabled(cfg config.Config) map[string]bool {
 		selected[name] = ok && hook.Recall.Enabled
 	}
 	return selected
+}
+
+func promptProviderRouting(reader *bufio.Reader, writer io.Writer, cfg *config.Config, provider, label string) error {
+	mode, err := promptSingleSelect(reader, writer, label+" provider mode", []setupOption{
+		{ID: "read_write", Label: "read and write"},
+		{ID: "read_only", Label: "read only"},
+		{ID: "write_only", Label: "write only"},
+	}, currentProviderMode(*cfg, provider))
+	if err != nil {
+		return err
+	}
+	policy, err := promptSingleSelect(reader, writer, label+" provider failure policy", []setupOption{
+		{ID: "required", Label: "required"},
+		{ID: "best_effort", Label: "best effort"},
+	}, currentProviderPolicy(*cfg, provider))
+	if err != nil {
+		return err
+	}
+	setDefaultProviderMode(cfg, provider, mode, policy == "required")
+	return nil
 }
 
 func currentProviderMode(cfg config.Config, provider string) string {

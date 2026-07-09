@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/pax-beehive/memory-adaptor/internal/adapters/local"
+	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
@@ -19,6 +20,9 @@ func DefaultRegistry() Registry {
 	registry := Registry{factories: make(map[string]Factory)}
 	registry.Register("local", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
 		return local.New(name, cfg.Path)
+	})
+	registry.Register("zep", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
+		return zepadapter.New(name, cfg)
 	})
 	return registry
 }

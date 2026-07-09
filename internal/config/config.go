@@ -24,10 +24,16 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Type    string `json:"type" yaml:"type"`
-	Enabled bool   `json:"enabled" yaml:"enabled"`
-	Path    string `json:"path,omitempty" yaml:"path,omitempty"`
-	APIKey  string `json:"api_key,omitempty" yaml:"api_key,omitempty"`
+	Type              string `json:"type" yaml:"type"`
+	Enabled           bool   `json:"enabled" yaml:"enabled"`
+	Path              string `json:"path,omitempty" yaml:"path,omitempty"`
+	APIKey            string `json:"api_key,omitempty" yaml:"api_key,omitempty"`
+	BaseURL           string `json:"base_url,omitempty" yaml:"base_url,omitempty"`
+	UserID            string `json:"user_id,omitempty" yaml:"user_id,omitempty"`
+	GraphID           string `json:"graph_id,omitempty" yaml:"graph_id,omitempty"`
+	SearchScope       string `json:"search_scope,omitempty" yaml:"search_scope,omitempty"`
+	MaxCharacters     int    `json:"max_characters,omitempty" yaml:"max_characters,omitempty"`
+	SourceDescription string `json:"source_description,omitempty" yaml:"source_description,omitempty"`
 
 	Read     *bool   `json:"read,omitempty" yaml:"read,omitempty"`
 	Write    *bool   `json:"write,omitempty" yaml:"write,omitempty"`
@@ -145,6 +151,11 @@ func DefaultConfig(configPath string) Config {
 				Type:    "local",
 				Enabled: true,
 				Path:    dataPath,
+			},
+			"zep": {
+				Type:        "zep",
+				Enabled:     false,
+				SearchScope: "episodes",
 			},
 		},
 		RecallProfiles: map[string]RecallProfileConfig{
@@ -277,6 +288,9 @@ func Normalize(cfg Config) Config {
 		}
 		if provider.Path != "" {
 			provider.Path = ExpandPath(provider.Path)
+		}
+		if provider.SearchScope == "" && provider.Type == "zep" {
+			provider.SearchScope = "episodes"
 		}
 		cfg.Providers[name] = provider
 	}

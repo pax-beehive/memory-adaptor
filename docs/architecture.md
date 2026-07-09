@@ -34,6 +34,12 @@ vendor-specific ranks.
 Provider configuration describes availability and connection details. It should
 not decide whether a specific hook or active recall path reads from the provider.
 
+Current provider adapters:
+
+- `local`: local JSONL storage with keyword relevance.
+- `zep`: Zep Graph storage via `github.com/getzep/zep-go/v3`; writes text
+  episodes and maps graph search results into memory hits.
+
 ## Recall Profiles
 
 A recall profile is the policy boundary for reads. It chooses:
