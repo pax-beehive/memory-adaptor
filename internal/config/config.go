@@ -25,16 +25,24 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Type              string `json:"type" yaml:"type"`
-	Enabled           bool   `json:"enabled" yaml:"enabled"`
-	Path              string `json:"path,omitempty" yaml:"path,omitempty"`
-	APIKey            string `json:"api_key,omitempty" yaml:"api_key,omitempty"`
-	BaseURL           string `json:"base_url,omitempty" yaml:"base_url,omitempty"`
-	UserID            string `json:"user_id,omitempty" yaml:"user_id,omitempty"`
-	GraphID           string `json:"graph_id,omitempty" yaml:"graph_id,omitempty"`
-	SearchScope       string `json:"search_scope,omitempty" yaml:"search_scope,omitempty"`
-	MaxCharacters     int    `json:"max_characters,omitempty" yaml:"max_characters,omitempty"`
-	SourceDescription string `json:"source_description,omitempty" yaml:"source_description,omitempty"`
+	Type              string            `json:"type" yaml:"type"`
+	Enabled           bool              `json:"enabled" yaml:"enabled"`
+	Path              string            `json:"path,omitempty" yaml:"path,omitempty"`
+	APIKey            string            `json:"api_key,omitempty" yaml:"api_key,omitempty"`
+	BaseURL           string            `json:"base_url,omitempty" yaml:"base_url,omitempty"`
+	Transport         string            `json:"transport,omitempty" yaml:"transport,omitempty"`
+	Command           string            `json:"command,omitempty" yaml:"command,omitempty"`
+	Args              []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	Env               map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	Timeout           string            `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	UserID            string            `json:"user_id,omitempty" yaml:"user_id,omitempty"`
+	AgentID           string            `json:"agent_id,omitempty" yaml:"agent_id,omitempty"`
+	RunID             string            `json:"run_id,omitempty" yaml:"run_id,omitempty"`
+	GraphID           string            `json:"graph_id,omitempty" yaml:"graph_id,omitempty"`
+	SearchScope       string            `json:"search_scope,omitempty" yaml:"search_scope,omitempty"`
+	MaxCharacters     int               `json:"max_characters,omitempty" yaml:"max_characters,omitempty"`
+	SourceDescription string            `json:"source_description,omitempty" yaml:"source_description,omitempty"`
+	Infer             *bool             `json:"infer,omitempty" yaml:"infer,omitempty"`
 
 	Read     *bool   `json:"read,omitempty" yaml:"read,omitempty"`
 	Write    *bool   `json:"write,omitempty" yaml:"write,omitempty"`
@@ -43,9 +51,10 @@ type ProviderConfig struct {
 }
 
 type ProviderRouteConfig struct {
-	Name     string  `json:"name" yaml:"name"`
-	Required bool    `json:"required" yaml:"required"`
-	Weight   float64 `json:"weight,omitempty" yaml:"weight,omitempty"`
+	Name       string                 `json:"name" yaml:"name"`
+	Required   bool                   `json:"required" yaml:"required"`
+	Weight     float64                `json:"weight,omitempty" yaml:"weight,omitempty"`
+	Thresholds *RecallThresholdConfig `json:"thresholds,omitempty" yaml:"thresholds,omitempty"`
 }
 
 type RecallProfileConfig struct {
@@ -203,6 +212,17 @@ func DefaultConfig(configPath string) Config {
 				Type:        "zep",
 				Enabled:     false,
 				SearchScope: "episodes",
+			},
+			"mem0": {
+				Type:    "mem0",
+				Enabled: false,
+				BaseURL: "http://localhost:8888",
+			},
+			"jsonrpc": {
+				Type:      "jsonrpc",
+				Enabled:   false,
+				Transport: "stdio",
+				Timeout:   "30s",
 			},
 		},
 		RecallProfiles: map[string]RecallProfileConfig{
@@ -496,6 +516,15 @@ func normalizeProviderConfig(provider ProviderConfig) ProviderConfig {
 	}
 	if provider.SearchScope == "" && provider.Type == "zep" {
 		provider.SearchScope = "episodes"
+	}
+	if provider.BaseURL == "" && provider.Type == "mem0" {
+		provider.BaseURL = "http://localhost:8888"
+	}
+	if provider.Transport == "" && provider.Type == "jsonrpc" {
+		provider.Transport = "stdio"
+	}
+	if provider.Timeout == "" && provider.Type == "jsonrpc" {
+		provider.Timeout = "30s"
 	}
 	return provider
 }

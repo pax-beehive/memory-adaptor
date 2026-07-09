@@ -39,8 +39,8 @@ paxm config doctor
 
 `paxm setup` is where the user chooses memory providers and agent hooks. Active
 recall requires at least one enabled readable provider. The SQLite provider works
-without an API key; remote providers such as Zep require the user to provide
-their API key during setup.
+without an API key; remote providers such as Zep or Mem0 require the user to
+provide their connection details during setup.
 
 To install the skill for Codex, ask an agent to read this repository, inspect
 `skills/paxm/SKILL.md`, and install the `paxm` skill into the active Codex skill
@@ -75,7 +75,10 @@ cmd/paxm
   internal/facade
   internal/memory        provider interface and multi-provider router
   internal/adapters      provider registry
+  internal/adapters/jsonrpc
+  internal/adapters/mem0
   internal/adapters/sqlite
+  internal/adapters/zep
   internal/config
   internal/telemetry   bounded event logs and metrics
 ```
@@ -143,6 +146,21 @@ providers:
     api_key: "plain-text-zep-api-key"
     user_id: todd
     search_scope: episodes
+
+  mem0:
+    type: mem0
+    enabled: false
+    base_url: http://localhost:8888
+    api_key: "plain-text-mem0-api-key"
+    user_id: todd
+
+  jsonrpc:
+    type: jsonrpc
+    enabled: false
+    transport: stdio
+    command: /opt/paxm/plugins/private-memory
+    args: ["--config", "/etc/private-memory.yaml"]
+    timeout: 30s
 
 recall_profiles:
   default:
@@ -294,11 +312,14 @@ telemetry:
   query_preview_chars: 80
 ```
 
-Multiple enabled providers are supported by configuration. Recall profiles decide
-which providers are read, how provider relevance is weighted, and what
-thresholds are applied. The default active recall profile returns 3 memories;
-pass `--limit N` to `paxm recall` to request more for a specific query. Write
-profiles decide which providers are written.
+Multiple enabled provider instances are supported by configuration. The key
+under `providers` is an instance name, not the adapter type, so configs can have
+multiple `mem0` or `jsonrpc` instances such as `mem0_personal`, `mem0_team`, and
+`corp_memory`. Recall profiles decide which provider instances are read, how
+provider relevance is weighted, and what thresholds are applied. The default
+active recall profile returns 3 memories; pass `--limit N` to `paxm recall` to
+request more for a specific query. Write profiles decide which provider
+instances are written.
 Optional provider failures are returned as provider errors; required provider
 failures fail the command.
 
@@ -311,6 +332,12 @@ Remote provider configs may include a plain-text `api_key` field. Zep is
 supported with `type: zep` using `github.com/getzep/zep-go/v3`; configure
 exactly one of `user_id` or `graph_id`. When setup is configured for a Zep
 user graph, it ensures the configured `user_id` exists before saving the config.
+Self-hosted Mem0 is supported with `type: mem0`; configure `base_url` without a
+`/v1` prefix and scope it with at least one of `user_id`, `agent_id`, or `run_id`.
+The Mem0 adapter sends `api_key` as `X-API-Key`, matching the OSS REST server.
+Custom plugin providers are supported with `type: jsonrpc`. V1 supports stdio
+plugins: paxm invokes the configured command with a JSON-RPC 2.0 request for
+`paxm.health`, `paxm.search`, `paxm.put`, or optional `paxm.putBatch`.
 
 `paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers selected agent integrations. Codex hooks are registered in the user-level Codex config. Pi support is installed as a Pi extension.
 

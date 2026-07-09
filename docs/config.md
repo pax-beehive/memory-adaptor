@@ -27,6 +27,21 @@ providers:
     user_id: todd
     search_scope: episodes
 
+  mem0:
+    type: mem0
+    enabled: false
+    base_url: http://localhost:8888
+    api_key: "plain-text-mem0-api-key"
+    user_id: todd
+
+  jsonrpc:
+    type: jsonrpc
+    enabled: false
+    transport: stdio
+    command: /opt/paxm/plugins/private-memory
+    args: ["--config", "/etc/private-memory.yaml"]
+    timeout: 30s
+
 recall_profiles:
   default:
     providers:
@@ -182,26 +197,80 @@ telemetry:
 
 ## Providers
 
-`providers` declares provider instances and connection details.
+`providers` declares provider instances and connection details. The map key is
+the provider instance name, not the adapter type. Multiple instances can share
+one `type` as long as each instance has a unique key:
+
+```yaml
+providers:
+  mem0_personal:
+    type: mem0
+    enabled: true
+    base_url: http://localhost:8888
+    user_id: todd
+
+  mem0_team:
+    type: mem0
+    enabled: true
+    base_url: https://mem0.internal.example
+    api_key: "plain-text-mem0-api-key"
+    agent_id: pax-team
+
+  corp_memory:
+    type: jsonrpc
+    enabled: true
+    transport: stdio
+    command: /opt/paxm/plugins/corp-memory
+```
 
 Fields:
 
-- `type`: adapter type, such as `sqlite` or `zep`.
+- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, or `jsonrpc`.
 - `enabled`: whether this provider can be used by profiles.
 - `path`: local SQLite provider database path.
 - `api_key`: optional plain-text API key for remote providers.
 - `base_url`: optional remote provider API base URL override.
-- `user_id`: Zep user graph target.
+- `transport`: JSON-RPC plugin transport. V1 supports `stdio`.
+- `command`: JSON-RPC plugin executable path.
+- `args`: optional JSON-RPC plugin command arguments.
+- `env`: optional environment variables for JSON-RPC plugin commands.
+- `timeout`: optional JSON-RPC plugin call timeout, such as `30s`.
+- `user_id`: Zep user graph target, or Mem0 user scope.
+- `agent_id`: Mem0 agent scope.
+- `run_id`: Mem0 run scope.
 - `graph_id`: Zep named graph target.
 - `search_scope`: Zep graph search scope. Supported values are `episodes`,
   `edges`, `nodes`, `observations`, `thread_summaries`, and `auto`.
 - `max_characters`: optional Zep auto-scope context character limit.
 - `source_description`: optional Zep source description for writes.
+- `infer`: optional Mem0 write flag. Omit it to use the server default.
 
-V1 ships with `sqlite` and `zep` provider adapters. Zep requires `api_key` and
-exactly one of `user_id` or `graph_id`. If setup is configured for a Zep user
-graph, it idempotently creates the configured `user_id` when the user does not
-already exist.
+V1 ships with `sqlite`, `zep`, `mem0`, and `jsonrpc` provider adapters. Zep
+requires `api_key` and exactly one of `user_id` or `graph_id`. If setup is
+configured for a Zep user graph, it idempotently creates the configured
+`user_id` when the user does not already exist.
+
+Mem0 is intended for the self-hosted OSS REST server. Configure `base_url`
+without a `/v1` prefix, for example `http://localhost:8888`, and set at least
+one scope for paxm to use with `user_id`, `agent_id`, or `run_id`. Programmatic
+auth uses `api_key` as an `X-API-Key` header; leave it blank only for local Mem0
+deployments that intentionally run with auth disabled.
+
+JSON-RPC providers are custom plugin commands. Paxm invokes the command over
+stdio with one JSON-RPC 2.0 request per provider operation. The command should
+read a single request from stdin, write a single response to stdout, and then
+exit. Supported methods are:
+
+- `paxm.health`
+- `paxm.search`
+- `paxm.put`
+- `paxm.putBatch` (optional; paxm falls back to repeated `paxm.put` when the
+  plugin returns JSON-RPC `-32601 Method not found`)
+
+`paxm.search` receives a `SearchQuery` JSON object and returns
+`{"hits":[...]}`. `paxm.put` receives a `MemoryItem` JSON object and returns
+`{"ref":{...}}` or `{"refs":[...]}`. `paxm.putBatch` receives
+`{"items":[...]}` and returns `{"refs":[...]}`.
 
 Legacy configs with a default `local` provider are loaded as a `sqlite`
 provider; a legacy `*.jsonl` path is mapped to the same basename with a
@@ -225,11 +294,34 @@ Provider route fields:
 - `name`: provider instance name from `providers`.
 - `required`: when true, a provider error fails the recall command.
 - `weight`: multiplier applied after provider relevance normalization.
+- `thresholds`: optional provider-specific recall thresholds. When present,
+  non-zero `min_relevance` or `min_score` values override the profile-level
+  defaults for this provider route only.
 
 Threshold fields:
 
 - `min_relevance`: provider-normalized relevance threshold before merge.
 - `min_score`: final score threshold after weight and ranking boosts.
+
+Example provider-specific passive recall thresholds:
+
+```yaml
+recall_profiles:
+  passive:
+    providers:
+      - name: sqlite
+        required: true
+        weight: 1
+      - name: mem0_team
+        required: false
+        weight: 1
+        thresholds:
+          min_relevance: 0.45
+          min_score: 0.45
+    thresholds:
+      min_relevance: 0.75
+      min_score: 0.75
+```
 
 Ranking fields:
 

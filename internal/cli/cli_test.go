@@ -317,6 +317,83 @@ func TestCLISetupInteractiveZepProvider(t *testing.T) {
 	}
 }
 
+func TestCLISetupInteractiveMem0Provider(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	setupInput := strings.NewReader("3\nhttp://mem0.local:8888\nmem0-key\n1\ntoddzheng\n1\n2\nnone\n")
+	if code := Main([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers["sqlite"].Enabled || cfg.Providers["zep"].Enabled {
+		t.Fatalf("only mem0 should be enabled: %#v", cfg.Providers)
+	}
+	mem0 := cfg.Providers["mem0"]
+	if !mem0.Enabled || mem0.APIKey != "mem0-key" || mem0.BaseURL != "http://mem0.local:8888" || mem0.UserID != "toddzheng" {
+		t.Fatalf("unexpected mem0 provider config: %#v", mem0)
+	}
+	recallRoutes := cfg.RecallProfiles["default"].Providers
+	if len(recallRoutes) != 1 || recallRoutes[0].Name != "mem0" || recallRoutes[0].Required {
+		t.Fatalf("unexpected recall routes: %#v", recallRoutes)
+	}
+	passiveRoutes := cfg.RecallProfiles["passive"].Providers
+	if len(passiveRoutes) != 1 || passiveRoutes[0].Name != "mem0" || passiveRoutes[0].Required {
+		t.Fatalf("unexpected passive recall routes: %#v", passiveRoutes)
+	}
+	writeRoutes := cfg.WriteProfiles["default"].Providers
+	if len(writeRoutes) != 1 || writeRoutes[0].Name != "mem0" || writeRoutes[0].Required {
+		t.Fatalf("unexpected write routes: %#v", writeRoutes)
+	}
+	if strings.Contains(stdout.String(), "installed hook shim") {
+		t.Fatalf("setup installed hook despite none selection: %s", stdout.String())
+	}
+}
+
+func TestCLISetupInteractiveJSONRPCProvider(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	setupInput := strings.NewReader("4\n1\n/opt/paxm/plugins/corp-memory\n--config /etc/corp-memory.yaml\n15s\n1\n2\nnone\n")
+	if code := Main([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers["sqlite"].Enabled || cfg.Providers["zep"].Enabled || cfg.Providers["mem0"].Enabled {
+		t.Fatalf("only jsonrpc should be enabled: %#v", cfg.Providers)
+	}
+	provider := cfg.Providers["jsonrpc"]
+	if !provider.Enabled || provider.Transport != "stdio" || provider.Command != "/opt/paxm/plugins/corp-memory" || provider.Timeout != "15s" {
+		t.Fatalf("unexpected jsonrpc provider config: %#v", provider)
+	}
+	if len(provider.Args) != 2 || provider.Args[0] != "--config" || provider.Args[1] != "/etc/corp-memory.yaml" {
+		t.Fatalf("unexpected jsonrpc args: %#v", provider.Args)
+	}
+	recallRoutes := cfg.RecallProfiles["default"].Providers
+	if len(recallRoutes) != 1 || recallRoutes[0].Name != "jsonrpc" || recallRoutes[0].Required {
+		t.Fatalf("unexpected recall routes: %#v", recallRoutes)
+	}
+	writeRoutes := cfg.WriteProfiles["default"].Providers
+	if len(writeRoutes) != 1 || writeRoutes[0].Name != "jsonrpc" || writeRoutes[0].Required {
+		t.Fatalf("unexpected write routes: %#v", writeRoutes)
+	}
+	if strings.Contains(stdout.String(), "installed hook shim") {
+		t.Fatalf("setup installed hook despite none selection: %s", stdout.String())
+	}
+}
+
 func TestCLISetupEnsuresZepUserTarget(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))

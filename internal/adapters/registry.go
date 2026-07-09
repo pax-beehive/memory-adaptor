@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 
+	jsonrpcadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/jsonrpc"
+	mem0adapter "github.com/pax-beehive/memory-adaptor/internal/adapters/mem0"
 	sqliteadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/sqlite"
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
@@ -23,6 +25,12 @@ func DefaultRegistry() Registry {
 	})
 	registry.Register("zep", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
 		return zepadapter.New(name, cfg)
+	})
+	registry.Register("mem0", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
+		return mem0adapter.New(name, cfg)
+	})
+	registry.Register("jsonrpc", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
+		return jsonrpcadapter.New(name, cfg)
 	})
 	return registry
 }

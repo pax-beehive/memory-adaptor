@@ -41,6 +41,11 @@ Current provider adapters:
   lexical relevance.
 - `zep`: Zep Graph storage via `github.com/getzep/zep-go/v3`; writes text
   episodes and maps graph search results into memory hits.
+- `mem0`: self-hosted Mem0 OSS REST storage; writes text through
+  `POST /memories` and maps `POST /search` results into memory hits.
+- `jsonrpc`: custom stdio plugin storage. The plugin implements the provider
+  contract with JSON-RPC 2.0 methods while paxm keeps routing, thresholds, and
+  ranking in core.
 
 ## Recall Profiles
 
@@ -50,11 +55,12 @@ A recall profile is the policy boundary for reads. It chooses:
 - whether each provider is required or best effort for that route;
 - each provider route weight;
 - max result count;
-- relevance and final score thresholds;
+- relevance and final score thresholds, with optional provider-route overrides;
 - ranking behavior.
 
 `min_relevance` filters provider-normalized hits before cross-provider ranking.
 `min_score` filters the final merged score after route weight and ranking boosts.
+Provider-route thresholds override the profile default for that provider only.
 
 Passive hook recall should not use one policy for every turn. The default
 `passive_initial` profile is used only for the first `user_input` observed for a

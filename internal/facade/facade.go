@@ -320,11 +320,16 @@ func (s *Service) defaultActiveRecallProfile() string {
 func toMemoryRoutes(routes []config.ProviderRouteConfig) []memory.ProviderRoute {
 	memoryRoutes := make([]memory.ProviderRoute, 0, len(routes))
 	for _, route := range routes {
-		memoryRoutes = append(memoryRoutes, memory.ProviderRoute{
+		memoryRoute := memory.ProviderRoute{
 			Name:     route.Name,
 			Required: route.Required,
 			Weight:   route.Weight,
-		})
+		}
+		if route.Thresholds != nil {
+			memoryRoute.MinRelevance = route.Thresholds.MinRelevance
+			memoryRoute.MinScore = route.Thresholds.MinScore
+		}
+		memoryRoutes = append(memoryRoutes, memoryRoute)
 	}
 	return memoryRoutes
 }

@@ -148,6 +148,51 @@ func TestRouterSearchAppliesPolicyThresholds(t *testing.T) {
 	}
 }
 
+func TestRouterSearchAppliesProviderRouteThresholdOverrides(t *testing.T) {
+	t.Parallel()
+
+	router, err := NewRouter([]ProviderBinding{
+		{
+			Provider: fakeProvider{name: "strict", hits: []MemoryHit{
+				{ID: "strict-low", Text: "strict low", Relevance: 0.6},
+				{ID: "strict-high", Text: "strict high", Relevance: 0.9},
+			}},
+			Read: true,
+		},
+		{
+			Provider: fakeProvider{name: "loose", hits: []MemoryHit{
+				{ID: "loose-low", Text: "loose low", Relevance: 0.4},
+			}},
+			Read: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "threshold"}, SearchPolicy{
+		Providers: []ProviderRoute{
+			{Name: "strict", Required: true, Weight: 1},
+			{Name: "loose", Required: true, Weight: 1, MinRelevance: 0.3, MinScore: 0.3},
+		},
+		MinRelevance: 0.75,
+		MinScore:     0.75,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 2 {
+		t.Fatalf("expected strict high and loose low hits, got %#v", result.Hits)
+	}
+	ids := map[string]bool{}
+	for _, hit := range result.Hits {
+		ids[hit.ID] = true
+	}
+	if !ids["strict-high"] || !ids["loose-low"] || ids["strict-low"] {
+		t.Fatalf("provider thresholds were not applied: %#v", result.Hits)
+	}
+}
+
 func TestRouterPutWritesToAllWritableProviders(t *testing.T) {
 	t.Parallel()
 

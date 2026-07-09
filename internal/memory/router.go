@@ -11,11 +11,13 @@ import (
 )
 
 type ProviderBinding struct {
-	Provider Provider
-	Read     bool
-	Write    bool
-	Required bool
-	Weight   float64
+	Provider     Provider
+	Read         bool
+	Write        bool
+	Required     bool
+	Weight       float64
+	MinRelevance float64
+	MinScore     float64
 }
 
 type SearchResult struct {
@@ -118,15 +120,23 @@ func (r *Router) SearchWithPolicy(ctx context.Context, query SearchQuery, policy
 		if weight == 0 {
 			weight = 1
 		}
+		minRelevance := policy.MinRelevance
+		if res.binding.MinRelevance != 0 {
+			minRelevance = res.binding.MinRelevance
+		}
+		minScore := policy.MinScore
+		if res.binding.MinScore != 0 {
+			minScore = res.binding.MinScore
+		}
 		for _, hit := range res.hits {
 			hit.Provider = name
 			relevance := normalizedRelevance(hit)
-			if relevance < policy.MinRelevance {
+			if relevance < minRelevance {
 				continue
 			}
 			hit.Relevance = relevance
 			hit.Score = relevance*weight + recencyScore(hit.CreatedAt, policy.RecencyBoost)
-			if hit.Score < policy.MinScore {
+			if hit.Score < minScore {
 				continue
 			}
 			key := dedupeKey(hit)
@@ -264,6 +274,8 @@ func (r *Router) bindingsForRoutes(routes []ProviderRoute, op string) ([]Provide
 		} else if binding.Weight == 0 {
 			binding.Weight = 1
 		}
+		binding.MinRelevance = route.MinRelevance
+		binding.MinScore = route.MinScore
 		if op == "search" {
 			binding.Read = true
 		}

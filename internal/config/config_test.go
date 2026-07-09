@@ -32,6 +32,12 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if provider := cfg.Providers["sqlite"]; provider.Type != "sqlite" || !strings.HasSuffix(provider.Path, "memory.sqlite") {
 		t.Fatalf("default sqlite provider is invalid: %#v", provider)
 	}
+	if provider := cfg.Providers["mem0"]; provider.Type != "mem0" || provider.Enabled || provider.BaseURL != "http://localhost:8888" {
+		t.Fatalf("default mem0 provider is invalid: %#v", provider)
+	}
+	if provider := cfg.Providers["jsonrpc"]; provider.Type != "jsonrpc" || provider.Enabled || provider.Transport != "stdio" || provider.Timeout != "30s" {
+		t.Fatalf("default jsonrpc provider is invalid: %#v", provider)
+	}
 	active := cfg.RecallProfiles["default"]
 	if active.MaxResults != 3 {
 		t.Fatalf("default active recall should return 3 results: %#v", active)

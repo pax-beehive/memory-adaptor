@@ -139,69 +139,11 @@ func (r runner) runSetup(args []string) error {
 		if err != nil {
 			return err
 		}
-		if selectedProviders["sqlite"] {
-			sqlite := cfg.Providers["sqlite"]
-			sqlite.Path, err = promptString(promptReader, r.stdout, "SQLite memory path", sqlite.Path)
-			if err != nil {
-				return err
+		for _, providerName := range providerOptionIDs(cfg) {
+			if !selectedProviders[providerName] {
+				continue
 			}
-			cfg.Providers["sqlite"] = sqlite
-			if err := promptProviderRouting(promptReader, r.stdout, &cfg, "sqlite", "SQLite"); err != nil {
-				return err
-			}
-		}
-		if selectedProviders["zep"] {
-			zep := cfg.Providers["zep"]
-			zep.APIKey, err = promptString(promptReader, r.stdout, "Zep API key", zep.APIKey)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(zep.APIKey) == "" {
-				return errors.New("zep setup requires an API key")
-			}
-			targetDefault := "user"
-			if zep.GraphID != "" {
-				targetDefault = "graph"
-			}
-			target, err := promptSingleSelect(promptReader, r.stdout, "Zep memory target", []setupOption{
-				{ID: "user", Label: "user graph"},
-				{ID: "graph", Label: "named graph"},
-			}, targetDefault)
-			if err != nil {
-				return err
-			}
-			if target == "user" {
-				zep.UserID, err = promptString(promptReader, r.stdout, "Zep user ID", zep.UserID)
-				if err != nil {
-					return err
-				}
-				zep.GraphID = ""
-				if strings.TrimSpace(zep.UserID) == "" {
-					return errors.New("zep setup requires a user ID")
-				}
-			} else {
-				zep.GraphID, err = promptString(promptReader, r.stdout, "Zep graph ID", zep.GraphID)
-				if err != nil {
-					return err
-				}
-				zep.UserID = ""
-				if strings.TrimSpace(zep.GraphID) == "" {
-					return errors.New("zep setup requires a graph ID")
-				}
-			}
-			zep.SearchScope, err = promptSingleSelect(promptReader, r.stdout, "Zep search scope", []setupOption{
-				{ID: "episodes", Label: "episodes"},
-				{ID: "edges", Label: "edges"},
-				{ID: "nodes", Label: "nodes"},
-				{ID: "observations", Label: "observations"},
-				{ID: "thread_summaries", Label: "thread summaries"},
-				{ID: "auto", Label: "auto"},
-			}, firstNonEmpty(zep.SearchScope, "episodes"))
-			if err != nil {
-				return err
-			}
-			cfg.Providers["zep"] = zep
-			if err := promptProviderRouting(promptReader, r.stdout, &cfg, "zep", "Zep"); err != nil {
+			if err := promptProviderInstance(promptReader, r.stdout, &cfg, providerName); err != nil {
 				return err
 			}
 		}
@@ -1395,7 +1337,14 @@ func providerOptions(cfg config.Config) []setupOption {
 	for name := range cfg.Providers {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		leftPriority := providerOptionPriority(cfg.Providers[names[i]].Type)
+		rightPriority := providerOptionPriority(cfg.Providers[names[j]].Type)
+		if leftPriority == rightPriority {
+			return names[i] < names[j]
+		}
+		return leftPriority < rightPriority
+	})
 	options := make([]setupOption, 0, len(names))
 	for _, name := range names {
 		provider := cfg.Providers[name]
@@ -1406,6 +1355,242 @@ func providerOptions(cfg config.Config) []setupOption {
 		options = append(options, setupOption{ID: name, Label: label})
 	}
 	return options
+}
+
+func providerOptionIDs(cfg config.Config) []string {
+	options := providerOptions(cfg)
+	ids := make([]string, 0, len(options))
+	for _, option := range options {
+		ids = append(ids, option.ID)
+	}
+	return ids
+}
+
+func providerOptionPriority(providerType string) int {
+	switch providerType {
+	case "sqlite":
+		return 0
+	case "zep":
+		return 1
+	case "mem0":
+		return 2
+	case "jsonrpc":
+		return 3
+	default:
+		return 100
+	}
+}
+
+func promptProviderInstance(reader *bufio.Reader, writer io.Writer, cfg *config.Config, providerName string) error {
+	provider := cfg.Providers[providerName]
+	switch provider.Type {
+	case "sqlite":
+		return promptSQLiteProvider(reader, writer, cfg, providerName)
+	case "zep":
+		return promptZepProvider(reader, writer, cfg, providerName)
+	case "mem0":
+		return promptMem0Provider(reader, writer, cfg, providerName)
+	case "jsonrpc":
+		return promptJSONRPCProvider(reader, writer, cfg, providerName)
+	default:
+		return promptProviderRouting(reader, writer, cfg, providerName, providerPromptLabel(providerName, provider))
+	}
+}
+
+func promptSQLiteProvider(reader *bufio.Reader, writer io.Writer, cfg *config.Config, providerName string) error {
+	provider := cfg.Providers[providerName]
+	var err error
+	provider.Path, err = promptString(reader, writer, providerPromptLabel(providerName, provider)+" memory path", provider.Path)
+	if err != nil {
+		return err
+	}
+	cfg.Providers[providerName] = provider
+	return promptProviderRouting(reader, writer, cfg, providerName, providerPromptLabel(providerName, provider))
+}
+
+func promptZepProvider(reader *bufio.Reader, writer io.Writer, cfg *config.Config, providerName string) error {
+	zep := cfg.Providers[providerName]
+	var err error
+	zep.APIKey, err = promptString(reader, writer, providerPromptLabel(providerName, zep)+" API key", zep.APIKey)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(zep.APIKey) == "" {
+		return errors.New("zep setup requires an API key")
+	}
+	targetDefault := "user"
+	if zep.GraphID != "" {
+		targetDefault = "graph"
+	}
+	target, err := promptSingleSelect(reader, writer, providerPromptLabel(providerName, zep)+" memory target", []setupOption{
+		{ID: "user", Label: "user graph"},
+		{ID: "graph", Label: "named graph"},
+	}, targetDefault)
+	if err != nil {
+		return err
+	}
+	if target == "user" {
+		zep.UserID, err = promptString(reader, writer, providerPromptLabel(providerName, zep)+" user ID", zep.UserID)
+		if err != nil {
+			return err
+		}
+		zep.GraphID = ""
+		if strings.TrimSpace(zep.UserID) == "" {
+			return errors.New("zep setup requires a user ID")
+		}
+	} else {
+		zep.GraphID, err = promptString(reader, writer, providerPromptLabel(providerName, zep)+" graph ID", zep.GraphID)
+		if err != nil {
+			return err
+		}
+		zep.UserID = ""
+		if strings.TrimSpace(zep.GraphID) == "" {
+			return errors.New("zep setup requires a graph ID")
+		}
+	}
+	zep.SearchScope, err = promptSingleSelect(reader, writer, providerPromptLabel(providerName, zep)+" search scope", []setupOption{
+		{ID: "episodes", Label: "episodes"},
+		{ID: "edges", Label: "edges"},
+		{ID: "nodes", Label: "nodes"},
+		{ID: "observations", Label: "observations"},
+		{ID: "thread_summaries", Label: "thread summaries"},
+		{ID: "auto", Label: "auto"},
+	}, firstNonEmpty(zep.SearchScope, "episodes"))
+	if err != nil {
+		return err
+	}
+	cfg.Providers[providerName] = zep
+	return promptProviderRouting(reader, writer, cfg, providerName, providerPromptLabel(providerName, zep))
+}
+
+func promptMem0Provider(reader *bufio.Reader, writer io.Writer, cfg *config.Config, providerName string) error {
+	mem0 := cfg.Providers[providerName]
+	label := providerPromptLabel(providerName, mem0)
+	var err error
+	mem0.BaseURL, err = promptString(reader, writer, label+" base URL", firstNonEmpty(mem0.BaseURL, "http://localhost:8888"))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(mem0.BaseURL) == "" {
+		return errors.New("mem0 setup requires a base URL")
+	}
+	mem0.APIKey, err = promptString(reader, writer, label+" API key (blank if auth is disabled)", mem0.APIKey)
+	if err != nil {
+		return err
+	}
+	target, err := promptSingleSelect(reader, writer, label+" memory target", []setupOption{
+		{ID: "user", Label: "user_id"},
+		{ID: "agent", Label: "agent_id"},
+		{ID: "run", Label: "run_id"},
+	}, currentMem0Target(mem0))
+	if err != nil {
+		return err
+	}
+	switch target {
+	case "agent":
+		mem0.AgentID, err = promptString(reader, writer, label+" agent ID", mem0.AgentID)
+		if err != nil {
+			return err
+		}
+		mem0.UserID = ""
+		mem0.RunID = ""
+		if strings.TrimSpace(mem0.AgentID) == "" {
+			return errors.New("mem0 setup requires an agent ID")
+		}
+	case "run":
+		mem0.RunID, err = promptString(reader, writer, label+" run ID", mem0.RunID)
+		if err != nil {
+			return err
+		}
+		mem0.UserID = ""
+		mem0.AgentID = ""
+		if strings.TrimSpace(mem0.RunID) == "" {
+			return errors.New("mem0 setup requires a run ID")
+		}
+	default:
+		mem0.UserID, err = promptString(reader, writer, label+" user ID", mem0.UserID)
+		if err != nil {
+			return err
+		}
+		mem0.AgentID = ""
+		mem0.RunID = ""
+		if strings.TrimSpace(mem0.UserID) == "" {
+			return errors.New("mem0 setup requires a user ID")
+		}
+	}
+	cfg.Providers[providerName] = mem0
+	return promptProviderRouting(reader, writer, cfg, providerName, label)
+}
+
+func promptJSONRPCProvider(reader *bufio.Reader, writer io.Writer, cfg *config.Config, providerName string) error {
+	provider := cfg.Providers[providerName]
+	label := providerPromptLabel(providerName, provider)
+	var err error
+	provider.Transport, err = promptSingleSelect(reader, writer, label+" transport", []setupOption{
+		{ID: "stdio", Label: "stdio"},
+	}, firstNonEmpty(provider.Transport, "stdio"))
+	if err != nil {
+		return err
+	}
+	provider.Command, err = promptString(reader, writer, label+" command", provider.Command)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(provider.Command) == "" {
+		return errors.New("jsonrpc setup requires a command")
+	}
+	argsText, err := promptString(reader, writer, label+" args (space-separated)", strings.Join(provider.Args, " "))
+	if err != nil {
+		return err
+	}
+	provider.Args = strings.Fields(argsText)
+	provider.Timeout, err = promptString(reader, writer, label+" timeout", firstNonEmpty(provider.Timeout, "30s"))
+	if err != nil {
+		return err
+	}
+	if _, err := time.ParseDuration(provider.Timeout); err != nil {
+		return fmt.Errorf("jsonrpc setup timeout: %w", err)
+	}
+	cfg.Providers[providerName] = provider
+	return promptProviderRouting(reader, writer, cfg, providerName, label)
+}
+
+func providerPromptLabel(providerName string, provider config.ProviderConfig) string {
+	switch provider.Type {
+	case "sqlite":
+		if providerName == "sqlite" {
+			return "SQLite"
+		}
+		return providerName + " (SQLite)"
+	case "zep":
+		if providerName == "zep" {
+			return "Zep"
+		}
+		return providerName + " (Zep)"
+	case "mem0":
+		if providerName == "mem0" {
+			return "Mem0"
+		}
+		return providerName + " (Mem0)"
+	case "jsonrpc":
+		if providerName == "jsonrpc" {
+			return "JSON-RPC"
+		}
+		return providerName + " (JSON-RPC)"
+	default:
+		return providerName
+	}
+}
+
+func currentMem0Target(provider config.ProviderConfig) string {
+	switch {
+	case strings.TrimSpace(provider.AgentID) != "":
+		return "agent"
+	case strings.TrimSpace(provider.RunID) != "":
+		return "run"
+	default:
+		return "user"
+	}
 }
 
 func hookOptions(cfg config.Config) []setupOption {

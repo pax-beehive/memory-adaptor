@@ -38,9 +38,11 @@ type MemoryHit struct {
 }
 
 type ProviderRoute struct {
-	Name     string
-	Required bool
-	Weight   float64
+	Name         string
+	Required     bool
+	Weight       float64
+	MinRelevance float64
+	MinScore     float64
 }
 
 type SearchPolicy struct {

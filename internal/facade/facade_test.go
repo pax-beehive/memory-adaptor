@@ -120,6 +120,59 @@ func TestRecallUsesAgentActiveRecallProfile(t *testing.T) {
 	}
 }
 
+func TestRecallUsesProviderRouteThresholdOverride(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureProvider{
+		hits: []memory.MemoryHit{
+			{ID: "provider-override", Text: "provider-specific threshold", Relevance: 0.4, Score: 0.4},
+		},
+	}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{
+		Version: 1,
+		RecallProfiles: map[string]config.RecallProfileConfig{
+			"default": {
+				Providers: []config.ProviderRouteConfig{
+					{
+						Name:     "capture",
+						Required: true,
+						Weight:   1,
+						Thresholds: &config.RecallThresholdConfig{
+							MinRelevance: 0.3,
+							MinScore:     0.3,
+						},
+					},
+				},
+				Thresholds: config.RecallThresholdConfig{
+					MinRelevance: 0.8,
+					MinScore:     0.8,
+				},
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"codex": {
+				Enabled: true,
+				ActiveRecall: config.ActiveRecallConfig{
+					Enabled: true,
+					Profile: "default",
+				},
+			},
+		},
+	}, router)
+
+	result, err := service.Recall(context.Background(), RecallInput{Query: "threshold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].ID != "provider-override" {
+		t.Fatalf("provider threshold override was not applied: %#v", result.Hits)
+	}
+}
+
 func TestRunHookAppliesInsertionPolicy(t *testing.T) {
 	t.Parallel()
 
