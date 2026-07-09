@@ -59,6 +59,19 @@ recall_profiles:
       type: weighted_relevance
       recency_boost: 0
 
+  passive_initial:
+    providers:
+      - name: local
+        required: true
+        weight: 1.0
+    max_results: 5
+    thresholds:
+      min_relevance: 0.35
+      min_score: 0.35
+    ranking:
+      type: weighted_relevance
+      recency_boost: 0
+
 write_profiles:
   default:
     providers:
@@ -98,6 +111,13 @@ agents:
             min_score: 0.8
             max_items: 2
             require_query_terms: true
+          initial:
+            enabled: true
+            profile: passive_initial
+            max_results: 5
+            insertion:
+              min_score: 0.35
+              max_items: 5
         write:
           enabled: true
           profile: default
@@ -145,6 +165,13 @@ agents:
             min_score: 0.8
             max_items: 2
             require_query_terms: true
+          initial:
+            enabled: true
+            profile: passive_initial
+            max_results: 5
+            insertion:
+              min_score: 0.35
+              max_items: 5
 
 telemetry:
   enabled: true
@@ -189,8 +216,10 @@ The default config separates explicit and passive recall:
 
 - `default` is used by active `paxm recall` and returns 3 memories by default.
   Use `paxm recall --limit N` to request more for a specific query.
-- `passive` is used by Codex `UserPromptSubmit` and is intentionally narrower,
-  with higher thresholds and fewer results.
+- `passive_initial` is used only for the first `user_input` observed in a
+  session. It is looser and returns up to 5 memories for session warmup context.
+- `passive` is used by later hook-based `user_input` calls and is intentionally
+  narrower, with higher thresholds and fewer results.
 
 Provider route fields:
 
@@ -236,6 +265,9 @@ Hook recall fields:
 - `insertion.max_items`: maximum number of memories inserted by the hook.
 - `insertion.require_query_terms`: when true, a hit must contain at least one
   significant query term before it is inserted.
+- `initial`: optional first-user-input override. When enabled, paxm tracks
+  recent session keys locally and applies this looser recall profile only once
+  per target/session before falling back to the normal strict hook config.
 
 `agents.codex.hooks.*.write` controls passive hook writes. The built-in Codex
 event names are:

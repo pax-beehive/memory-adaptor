@@ -239,6 +239,45 @@ func TestInternalHookDoesNotBufferWhenHookWriteDisabled(t *testing.T) {
 	}
 }
 
+func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	r := runner{configPath: configPath, stderr: &bytes.Buffer{}}
+
+	first := r.markInitialUserInputRecall(cfg, facade.HookEvent{
+		Target: "codex",
+		Event:  "user_input",
+		Metadata: map[string]string{
+			"session_id": "session-a",
+		},
+	})
+	if first.Metadata[facade.HookRecallPhaseMetadataKey] != facade.HookRecallPhaseInitial {
+		t.Fatalf("first user_input should use initial recall: %#v", first.Metadata)
+	}
+
+	second := r.markInitialUserInputRecall(cfg, facade.HookEvent{
+		Target: "codex",
+		Event:  "user_input",
+		Metadata: map[string]string{
+			"session_id": "session-a",
+		},
+	})
+	if second.Metadata[facade.HookRecallPhaseMetadataKey] != "" {
+		t.Fatalf("second user_input should stay strict: %#v", second.Metadata)
+	}
+
+	nextSession := r.markInitialUserInputRecall(cfg, facade.HookEvent{
+		Target: "codex",
+		Event:  "user_input",
+		Metadata: map[string]string{
+			"session_id": "session-b",
+		},
+	})
+	if nextSession.Metadata[facade.HookRecallPhaseMetadataKey] != facade.HookRecallPhaseInitial {
+		t.Fatalf("new session should use initial recall: %#v", nextSession.Metadata)
+	}
+}
+
 func TestCLISetupInteractiveZepProvider(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))

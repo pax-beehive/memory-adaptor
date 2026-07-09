@@ -169,6 +169,18 @@ recall_profiles:
     ranking:
       type: weighted_relevance
 
+  passive_initial:
+    providers:
+      - name: local
+        required: true
+        weight: 1
+    max_results: 5
+    thresholds:
+      min_relevance: 0.35
+      min_score: 0.35
+    ranking:
+      type: weighted_relevance
+
 write_profiles:
   default:
     providers:
@@ -208,6 +220,13 @@ agents:
             min_score: 0.8
             max_items: 2
             require_query_terms: true
+          initial:
+            enabled: true
+            profile: passive_initial
+            max_results: 5
+            insertion:
+              min_score: 0.35
+              max_items: 5
         write:
           enabled: true
           profile: default
@@ -255,6 +274,13 @@ agents:
             min_score: 0.8
             max_items: 2
             require_query_terms: true
+          initial:
+            enabled: true
+            profile: passive_initial
+            max_results: 5
+            insertion:
+              min_score: 0.35
+              max_items: 5
 
 telemetry:
   enabled: true
@@ -275,6 +301,11 @@ pass `--limit N` to `paxm recall` to request more for a specific query. Write
 profiles decide which providers are written.
 Optional provider failures are returned as provider errors; required provider
 failures fail the command.
+
+Hook recall uses two passive profiles by default. The first `user_input` seen
+for a session can use the looser `passive_initial` profile as session warmup
+context. Later `user_input` hooks use the stricter `passive` profile to avoid
+polluting the agent context.
 
 Remote provider configs may include a plain-text `api_key` field. Zep is
 supported with `type: zep` using `github.com/getzep/zep-go/v3`; configure

@@ -37,12 +37,22 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if passive.MaxResults != 2 || passive.Thresholds.MinRelevance != 0.75 || passive.Thresholds.MinScore != 0.75 {
 		t.Fatalf("unexpected passive profile: %#v", passive)
 	}
+	initialProfile := cfg.RecallProfiles["passive_initial"]
+	if initialProfile.MaxResults != 5 || initialProfile.Thresholds.MinRelevance != 0.35 || initialProfile.Thresholds.MinScore != 0.35 {
+		t.Fatalf("unexpected initial passive profile: %#v", initialProfile)
+	}
 	hook := cfg.Agents["codex"].Hooks["user_input"].Recall
 	if hook.Profile != "passive" || hook.MaxResults != 2 {
 		t.Fatalf("user_input hook should use passive profile: %#v", hook)
 	}
 	if hook.Insertion.MinScore != 0.8 || hook.Insertion.MaxItems != 2 || !hook.Insertion.RequireQueryTerms {
 		t.Fatalf("unexpected passive insertion policy: %#v", hook.Insertion)
+	}
+	if hook.Initial == nil || !hook.Initial.Enabled || hook.Initial.Profile != "passive_initial" || hook.Initial.MaxResults != 5 {
+		t.Fatalf("user_input hook should include initial recall override: %#v", hook.Initial)
+	}
+	if hook.Initial.Insertion.MinScore != 0.35 || hook.Initial.Insertion.MaxItems != 5 || hook.Initial.Insertion.RequireQueryTerms {
+		t.Fatalf("unexpected initial insertion policy: %#v", hook.Initial.Insertion)
 	}
 }
 
@@ -65,6 +75,53 @@ func TestDefaultConfigEnablesBoundedTelemetry(t *testing.T) {
 	}
 	if cfg.Telemetry.CaptureQueryPreview {
 		t.Fatalf("query preview should be off by default")
+	}
+}
+
+func TestNormalizeBackfillsInitialPassiveRecall(t *testing.T) {
+	t.Parallel()
+
+	cfg := Normalize(Config{
+		Version: 1,
+		Providers: map[string]ProviderConfig{
+			"local": {Type: "local", Enabled: true},
+		},
+		RecallProfiles: map[string]RecallProfileConfig{
+			"default": {
+				Providers: []ProviderRouteConfig{{Name: "local", Required: false, Weight: 1}},
+			},
+			"passive": {
+				Providers: []ProviderRouteConfig{{Name: "local", Required: false, Weight: 1}},
+				Thresholds: RecallThresholdConfig{
+					MinRelevance: 0.75,
+					MinScore:     0.75,
+				},
+			},
+		},
+		Agents: map[string]AgentConfig{
+			"codex": {
+				Enabled: true,
+				Hooks: map[string]AgentHookConfig{
+					"user_input": {
+						Recall: HookRecallConfig{
+							Enabled:       true,
+							Profile:       "passive",
+							QueryTemplate: "{{ .prompt }}",
+							MaxResults:    2,
+						},
+					},
+				},
+			},
+		},
+	})
+
+	initialProfile := cfg.RecallProfiles["passive_initial"]
+	if len(initialProfile.Providers) != 1 || initialProfile.Providers[0].Name != "local" || initialProfile.Providers[0].Required {
+		t.Fatalf("initial profile should inherit passive routes: %#v", initialProfile)
+	}
+	initial := cfg.Agents["codex"].Hooks["user_input"].Recall.Initial
+	if initial == nil || !initial.Enabled || initial.Profile != "passive_initial" || initial.MaxResults != 5 {
+		t.Fatalf("user_input recall should receive initial override: %#v", initial)
 	}
 }
 

@@ -93,6 +93,15 @@ type HookRecallConfig struct {
 	MaxResults    int                 `json:"max_results,omitempty" yaml:"max_results,omitempty"`
 	Output        string              `json:"output,omitempty" yaml:"output,omitempty"`
 	Insertion     HookInsertionConfig `json:"insertion,omitempty" yaml:"insertion,omitempty"`
+	Initial       *HookInitialRecall  `json:"initial,omitempty" yaml:"initial,omitempty"`
+}
+
+type HookInitialRecall struct {
+	Enabled       bool                `json:"enabled" yaml:"enabled"`
+	Profile       string              `json:"profile,omitempty" yaml:"profile,omitempty"`
+	QueryTemplate string              `json:"query_template,omitempty" yaml:"query_template,omitempty"`
+	MaxResults    int                 `json:"max_results,omitempty" yaml:"max_results,omitempty"`
+	Insertion     HookInsertionConfig `json:"insertion,omitempty" yaml:"insertion,omitempty"`
 }
 
 type HookInsertionConfig struct {
@@ -223,6 +232,19 @@ func DefaultConfig(configPath string) Config {
 					Type: "weighted_relevance",
 				},
 			},
+			"passive_initial": {
+				Providers: []ProviderRouteConfig{
+					{Name: "local", Required: true, Weight: 1},
+				},
+				MaxResults: 5,
+				Thresholds: RecallThresholdConfig{
+					MinRelevance: 0.35,
+					MinScore:     0.35,
+				},
+				Ranking: RankingConfig{
+					Type: "weighted_relevance",
+				},
+			},
 		},
 		WriteProfiles: map[string]WriteProfileConfig{
 			"default": {
@@ -264,6 +286,7 @@ func DefaultConfig(configPath string) Config {
 								MaxItems:          2,
 								RequireQueryTerms: true,
 							},
+							Initial: defaultInitialHookRecall(),
 						},
 						Write: HookWriteConfig{
 							Enabled:  true,
@@ -311,6 +334,7 @@ func DefaultConfig(configPath string) Config {
 								MaxItems:          2,
 								RequireQueryTerms: true,
 							},
+							Initial: defaultInitialHookRecall(),
 						},
 					},
 				},
@@ -411,6 +435,13 @@ func Normalize(cfg Config) Config {
 	}
 	for name, profile := range cfg.RecallProfiles {
 		cfg.RecallProfiles[name] = normalizeRecallProfile(profile)
+	}
+	if _, ok := cfg.RecallProfiles["passive_initial"]; !ok {
+		base, ok := cfg.RecallProfiles["passive"]
+		if !ok {
+			base = cfg.RecallProfiles["default"]
+		}
+		cfg.RecallProfiles["passive_initial"] = passiveInitialRecallProfileFrom(base)
 	}
 	if len(cfg.WriteProfiles) == 0 {
 		cfg.WriteProfiles = map[string]WriteProfileConfig{
@@ -516,11 +547,25 @@ func normalizeAgent(agent AgentConfig) AgentConfig {
 		delete(agent.Hooks, "user_prompt")
 	}
 	for name, hook := range agent.Hooks {
+		if name == "user_input" && hook.Recall.Enabled && hook.Recall.Initial == nil {
+			hook.Recall.Initial = defaultInitialHookRecall()
+		}
 		if hook.Recall.Profile == "" {
 			hook.Recall.Profile = "default"
 		}
 		if hook.Recall.Output == "" {
 			hook.Recall.Output = "markdown"
+		}
+		if hook.Recall.Initial != nil {
+			if hook.Recall.Initial.Profile == "" {
+				hook.Recall.Initial.Profile = hook.Recall.Profile
+			}
+			if hook.Recall.Initial.QueryTemplate == "" {
+				hook.Recall.Initial.QueryTemplate = hook.Recall.QueryTemplate
+			}
+			if hook.Recall.Initial.MaxResults == 0 {
+				hook.Recall.Initial.MaxResults = hook.Recall.MaxResults
+			}
 		}
 		if hook.Write.Profile == "" {
 			hook.Write.Profile = "default"
@@ -540,6 +585,33 @@ func normalizeAgent(agent AgentConfig) AgentConfig {
 		agent.Hooks[name] = hook
 	}
 	return agent
+}
+
+func passiveInitialRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
+	return RecallProfileConfig{
+		Providers:  append([]ProviderRouteConfig(nil), base.Providers...),
+		MaxResults: 5,
+		Thresholds: RecallThresholdConfig{
+			MinRelevance: 0.35,
+			MinScore:     0.35,
+		},
+		Ranking: RankingConfig{
+			Type:         "weighted_relevance",
+			RecencyBoost: base.Ranking.RecencyBoost,
+		},
+	}
+}
+
+func defaultInitialHookRecall() *HookInitialRecall {
+	return &HookInitialRecall{
+		Enabled:    true,
+		Profile:    "passive_initial",
+		MaxResults: 5,
+		Insertion: HookInsertionConfig{
+			MinScore: 0.35,
+			MaxItems: 5,
+		},
+	}
 }
 
 func defaultTelemetryConfig(configPath string) TelemetryConfig {

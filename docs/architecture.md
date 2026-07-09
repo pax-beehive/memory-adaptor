@@ -55,9 +55,11 @@ A recall profile is the policy boundary for reads. It chooses:
 `min_relevance` filters provider-normalized hits before cross-provider ranking.
 `min_score` filters the final merged score after route weight and ranking boosts.
 
-Passive hook recall should use its own strict profile instead of reusing active
-recall defaults. The default `passive` profile limits results to 2 and uses
-higher relevance and score thresholds.
+Passive hook recall should not use one policy for every turn. The default
+`passive_initial` profile is used only for the first `user_input` observed for a
+session and is intentionally looser, closer to a RAG warmup for project context.
+The default `passive` profile is used for later `user_input` hooks and limits
+results to 2 with higher relevance and score thresholds.
 
 ## Write Profiles
 
@@ -102,10 +104,17 @@ paxm [--config PATH] config doctor
 ```
 
 `user_input` runs passive recall by rendering the configured hook recall
-template into a query. It also renders the configured write template and appends
-the result to the hook buffer. Before recall results are returned to the agent
+template into a query. The first `user_input` for a session can use the
+configured `recall.initial` override, which typically points at the looser
+`passive_initial` profile. Later `user_input` hooks use the normal strict
+`recall` settings. It also renders the configured write template and appends the
+result to the hook buffer. Before recall results are returned to the agent
 context, the hook applies a second insertion policy such as minimum score,
 maximum inserted items, and optional query-term overlap.
+
+The first-input decision is tracked in a bounded local state file under the paxm
+hooks directory. The state stores only recent session keys and timestamps; it
+does not store prompt text.
 
 `session_start` only appends a write item to the hook buffer.
 

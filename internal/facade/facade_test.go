@@ -181,6 +181,93 @@ func TestRunHookAppliesInsertionPolicy(t *testing.T) {
 	}
 }
 
+func TestRunHookUsesInitialRecallOverride(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureProvider{
+		hits: []memory.MemoryHit{
+			{ID: "warmup", Text: "project bootstrap memory", Score: 0.4, Relevance: 0.4},
+		},
+	}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{
+		Version: 1,
+		RecallProfiles: map[string]config.RecallProfileConfig{
+			"passive": {
+				Providers: []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				Thresholds: config.RecallThresholdConfig{
+					MinRelevance: 0.8,
+					MinScore:     0.8,
+				},
+			},
+			"passive_initial": {
+				Providers: []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				Thresholds: config.RecallThresholdConfig{
+					MinRelevance: 0.3,
+					MinScore:     0.3,
+				},
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"codex": {
+				Enabled: true,
+				Hooks: map[string]config.AgentHookConfig{
+					"user_input": {
+						Recall: config.HookRecallConfig{
+							Enabled:       true,
+							Profile:       "passive",
+							QueryTemplate: "{{ .prompt }}",
+							MaxResults:    2,
+							Insertion: config.HookInsertionConfig{
+								MinScore: 0.8,
+							},
+							Initial: &config.HookInitialRecall{
+								Enabled:    true,
+								Profile:    "passive_initial",
+								MaxResults: 5,
+								Insertion: config.HookInsertionConfig{
+									MinScore: 0.3,
+									MaxItems: 5,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}, router)
+
+	strict, err := service.RunHook(context.Background(), HookEvent{
+		Target: "codex",
+		Event:  "user_input",
+		Prompt: "project bootstrap",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strict.Recall == nil || len(strict.Recall.Hits) != 0 {
+		t.Fatalf("strict user_input should filter low-confidence hits: %#v", strict.Recall)
+	}
+
+	initial, err := service.RunHook(context.Background(), HookEvent{
+		Target: "codex",
+		Event:  "user_input",
+		Prompt: "project bootstrap",
+		Metadata: map[string]string{
+			HookRecallPhaseMetadataKey: HookRecallPhaseInitial,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Recall == nil || len(initial.Recall.Hits) != 1 || initial.Recall.Hits[0].ID != "warmup" {
+		t.Fatalf("initial user_input should use loose policy: %#v", initial.Recall)
+	}
+}
+
 func TestHookWriteItemRendersTemplateAndMetadata(t *testing.T) {
 	t.Parallel()
 

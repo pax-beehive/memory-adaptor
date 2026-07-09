@@ -310,6 +310,8 @@ func setupBaseConfig(path string, useExisting bool) (config.Config, error) {
 		} else {
 			if name == "passive" {
 				cfg.RecallProfiles[name] = passiveProfileFrom(cfg.RecallProfiles["default"])
+			} else if name == "passive_initial" {
+				cfg.RecallProfiles[name] = passiveInitialProfileFrom(cfg.RecallProfiles["default"])
 			} else {
 				cfg.RecallProfiles[name] = profile
 			}
@@ -392,6 +394,10 @@ func mergeHookDefaults(current, defaults config.AgentHookConfig) config.AgentHoo
 	if current.Recall.Insertion == (config.HookInsertionConfig{}) {
 		current.Recall.Insertion = defaults.Recall.Insertion
 	}
+	if current.Recall.Initial == nil && defaults.Recall.Initial != nil {
+		initial := *defaults.Recall.Initial
+		current.Recall.Initial = &initial
+	}
 	if current.Write.Profile == "" {
 		current.Write.Profile = defaults.Write.Profile
 	}
@@ -418,6 +424,21 @@ func passiveProfileFrom(base config.RecallProfileConfig) config.RecallProfileCon
 		Thresholds: config.RecallThresholdConfig{
 			MinRelevance: 0.75,
 			MinScore:     0.75,
+		},
+		Ranking: config.RankingConfig{
+			Type:         "weighted_relevance",
+			RecencyBoost: base.Ranking.RecencyBoost,
+		},
+	}
+}
+
+func passiveInitialProfileFrom(base config.RecallProfileConfig) config.RecallProfileConfig {
+	return config.RecallProfileConfig{
+		Providers:  append([]config.ProviderRouteConfig(nil), base.Providers...),
+		MaxResults: 5,
+		Thresholds: config.RecallThresholdConfig{
+			MinRelevance: 0.35,
+			MinScore:     0.35,
 		},
 		Ranking: config.RankingConfig{
 			Type:         "weighted_relevance",
@@ -585,12 +606,15 @@ func (r runner) runInternalHook(args []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg, cfgErr := config.Load(r.configFile()); cfgErr == nil && hookWriteEnabled(cfg, event) {
-		bufferStarted := time.Now()
-		response, err := r.sendHookToBuffer(event)
-		r.recordHookWriteTelemetry(cfg, event, response, time.Since(bufferStarted), err)
-		if err != nil {
-			fmt.Fprintf(r.stderr, "paxm hook buffer skipped: %s\n", err)
+	if cfg, cfgErr := config.Load(r.configFile()); cfgErr == nil {
+		event = r.markInitialUserInputRecall(cfg, event)
+		if hookWriteEnabled(cfg, event) {
+			bufferStarted := time.Now()
+			response, err := r.sendHookToBuffer(event)
+			r.recordHookWriteTelemetry(cfg, event, response, time.Since(bufferStarted), err)
+			if err != nil {
+				fmt.Fprintf(r.stderr, "paxm hook buffer skipped: %s\n", err)
+			}
 		}
 	}
 	if event.Event == "user_input" {
@@ -1153,6 +1177,9 @@ func hookRecallProfile(cfg config.Config, event facade.HookEvent) string {
 	}
 	if agent, ok := cfg.Agents[event.Target]; ok {
 		if hook, ok := agent.Hooks[event.Event]; ok {
+			if event.Metadata != nil && event.Metadata[facade.HookRecallPhaseMetadataKey] == facade.HookRecallPhaseInitial && hook.Recall.Initial != nil && hook.Recall.Initial.Enabled {
+				return effectiveRecallProfile(cfg, hook.Recall.Initial.Profile)
+			}
 			return effectiveRecallProfile(cfg, hook.Recall.Profile)
 		}
 	}
@@ -1181,6 +1208,163 @@ func hookWriteEnabled(cfg config.Config, event facade.HookEvent) bool {
 	}
 	hook, ok := agent.Hooks[event.Event]
 	return ok && hook.Write.Enabled
+}
+
+func (r runner) markInitialUserInputRecall(cfg config.Config, event facade.HookEvent) facade.HookEvent {
+	if !hookInitialRecallEnabled(cfg, event) {
+		return event
+	}
+	key := hookSessionStateKey(event)
+	if key == "" {
+		return event
+	}
+	first, err := markHookSessionSeen(hookSessionStatePath(r.configFile()), key, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(r.stderr, "paxm hook state skipped: %s\n", err)
+		return event
+	}
+	if !first {
+		return event
+	}
+	if event.Metadata == nil {
+		event.Metadata = make(map[string]string)
+	}
+	event.Metadata[facade.HookRecallPhaseMetadataKey] = facade.HookRecallPhaseInitial
+	return event
+}
+
+func hookInitialRecallEnabled(cfg config.Config, event facade.HookEvent) bool {
+	if event.Target == "" {
+		event.Target = "codex"
+	}
+	if event.Event == "" {
+		event.Event = "user_input"
+	}
+	if event.Event != "user_input" {
+		return false
+	}
+	agent, ok := cfg.Agents[event.Target]
+	if !ok || !agent.Enabled {
+		return false
+	}
+	hook, ok := agent.Hooks[event.Event]
+	return ok && hook.Recall.Enabled && hook.Recall.Initial != nil && hook.Recall.Initial.Enabled
+}
+
+func hookSessionStateKey(event facade.HookEvent) string {
+	target := event.Target
+	if target == "" {
+		target = "codex"
+	}
+	if value := strings.TrimSpace(event.Metadata["session_id"]); value != "" {
+		return target + "/session/" + value
+	}
+	if value := strings.TrimSpace(event.Metadata["transcript_path"]); value != "" {
+		return target + "/transcript/" + value
+	}
+	if value := strings.TrimSpace(event.Workspace); value != "" {
+		return target + "/workspace/" + value
+	}
+	if value := strings.TrimSpace(event.Metadata["cwd"]); value != "" {
+		return target + "/workspace/" + value
+	}
+	return ""
+}
+
+func hookSessionStatePath(configPath string) string {
+	return filepath.Join(filepath.Dir(config.ExpandPath(configPath)), "hooks", "session_state.json")
+}
+
+const (
+	hookSessionStateVersion    = 1
+	hookSessionStateMaxEntries = 1000
+	hookSessionStateTTL        = 7 * 24 * time.Hour
+)
+
+type hookSessionState struct {
+	Version int                  `json:"version"`
+	Seen    map[string]time.Time `json:"seen"`
+}
+
+func markHookSessionSeen(path, key string, now time.Time) (bool, error) {
+	state, err := loadHookSessionState(path)
+	if err != nil {
+		return false, err
+	}
+	if state.Seen == nil {
+		state.Seen = make(map[string]time.Time)
+	}
+	pruneHookSessionState(&state, now)
+	_, exists := state.Seen[key]
+	state.Seen[key] = now.UTC()
+	if err := saveHookSessionState(path, state); err != nil {
+		return false, err
+	}
+	return !exists, nil
+}
+
+func loadHookSessionState(path string) (hookSessionState, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return hookSessionState{Version: hookSessionStateVersion, Seen: make(map[string]time.Time)}, nil
+		}
+		return hookSessionState{}, err
+	}
+	var state hookSessionState
+	if err := json.Unmarshal(bytes, &state); err != nil {
+		return hookSessionState{Version: hookSessionStateVersion, Seen: make(map[string]time.Time)}, nil
+	}
+	if state.Version == 0 {
+		state.Version = hookSessionStateVersion
+	}
+	if state.Seen == nil {
+		state.Seen = make(map[string]time.Time)
+	}
+	return state, nil
+}
+
+func saveHookSessionState(path string, state hookSessionState) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	state.Version = hookSessionStateVersion
+	bytes, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	if err := os.WriteFile(tmp, bytes, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func pruneHookSessionState(state *hookSessionState, now time.Time) {
+	cutoff := now.Add(-hookSessionStateTTL)
+	for key, seenAt := range state.Seen {
+		if seenAt.Before(cutoff) {
+			delete(state.Seen, key)
+		}
+	}
+	if len(state.Seen) <= hookSessionStateMaxEntries {
+		return
+	}
+	type seenEntry struct {
+		Key    string
+		SeenAt time.Time
+	}
+	entries := make([]seenEntry, 0, len(state.Seen))
+	for key, seenAt := range state.Seen {
+		entries = append(entries, seenEntry{Key: key, SeenAt: seenAt})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].SeenAt.Before(entries[j].SeenAt)
+	})
+	for len(entries) > hookSessionStateMaxEntries {
+		delete(state.Seen, entries[0].Key)
+		entries = entries[1:]
+	}
 }
 
 func telemetryError(err error) string {
@@ -1357,6 +1541,10 @@ func upsertRecallRoute(cfg *config.Config, provider string, required bool) {
 		cfg.RecallProfiles["passive"] = passiveProfileFrom(cfg.RecallProfiles["default"])
 	}
 	upsertRecallRouteInProfile(cfg, "passive", provider, required)
+	if _, ok := cfg.RecallProfiles["passive_initial"]; !ok {
+		cfg.RecallProfiles["passive_initial"] = passiveInitialProfileFrom(cfg.RecallProfiles["default"])
+	}
+	upsertRecallRouteInProfile(cfg, "passive_initial", provider, required)
 }
 
 func upsertRecallRouteInProfile(cfg *config.Config, profileName, provider string, required bool) {
@@ -1377,7 +1565,7 @@ func upsertRecallRouteInProfile(cfg *config.Config, profileName, provider string
 }
 
 func removeRecallRoute(cfg *config.Config, provider string) {
-	for _, profileName := range []string{"default", "passive"} {
+	for _, profileName := range []string{"default", "passive", "passive_initial"} {
 		profile := cfg.RecallProfiles[profileName]
 		profile.Providers = filterRoutes(profile.Providers, provider)
 		cfg.RecallProfiles[profileName] = profile

@@ -14,6 +14,11 @@ import (
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
 
+const (
+	HookRecallPhaseMetadataKey = "paxm_recall_phase"
+	HookRecallPhaseInitial     = "initial"
+)
+
 type Service struct {
 	cfg    config.Config
 	router *memory.Router
@@ -178,10 +183,11 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 		return result, nil
 	}
 
+	recallCfg := effectiveHookRecallConfig(eventCfg.Recall, event)
 	query := strings.TrimSpace(event.Query)
 	if query == "" {
 		var err error
-		query, err = renderHookQuery(eventCfg.Recall.QueryTemplate, event)
+		query, err = renderHookQuery(recallCfg.QueryTemplate, event)
 		if err != nil {
 			return result, err
 		}
@@ -191,18 +197,38 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 	}
 	limit := event.Limit
 	if limit == 0 {
-		limit = eventCfg.Recall.MaxResults
+		limit = recallCfg.MaxResults
 	}
 	recall, err := s.Recall(ctx, RecallInput{
 		Query:   query,
-		Profile: eventCfg.Recall.Profile,
+		Profile: recallCfg.Profile,
 		Limit:   limit,
 		Meta:    event.Metadata,
 	})
-	recall.Hits = filterHookInsertionHits(recall.Hits, query, eventCfg.Recall.Insertion)
+	recall.Hits = filterHookInsertionHits(recall.Hits, query, recallCfg.Insertion)
 	result.Query = recall.Query
 	result.Recall = &recall
 	return result, err
+}
+
+func effectiveHookRecallConfig(recall config.HookRecallConfig, event HookEvent) config.HookRecallConfig {
+	if event.Metadata == nil || event.Metadata[HookRecallPhaseMetadataKey] != HookRecallPhaseInitial || recall.Initial == nil || !recall.Initial.Enabled {
+		return recall
+	}
+	initial := recall.Initial
+	if initial.Profile != "" {
+		recall.Profile = initial.Profile
+	}
+	if initial.QueryTemplate != "" {
+		recall.QueryTemplate = initial.QueryTemplate
+	}
+	if initial.MaxResults != 0 {
+		recall.MaxResults = initial.MaxResults
+	}
+	if initial.Insertion != (config.HookInsertionConfig{}) {
+		recall.Insertion = initial.Insertion
+	}
+	return recall
 }
 
 func (s *Service) HookWriteItem(event HookEvent) (IngestInput, bool, error) {
