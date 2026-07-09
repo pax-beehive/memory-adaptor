@@ -237,6 +237,25 @@ agents:
             flush: true
             flush_count: 10
 
+  pi:
+    enabled: false
+    active_recall:
+      enabled: true
+      profile: default
+      output: markdown
+    hooks:
+      user_input:
+        recall:
+          enabled: false
+          profile: passive
+          query_template: "{{ .prompt }}"
+          max_results: 2
+          output: markdown
+          insertion:
+            min_score: 0.8
+            max_items: 2
+            require_query_terms: true
+
 telemetry:
   enabled: true
   dir: ~/.local/state/paxm
@@ -262,7 +281,7 @@ supported with `type: zep` using `github.com/getzep/zep-go/v3`; configure
 exactly one of `user_id` or `graph_id`. When setup is configured for a Zep
 user graph, it ensures the configured `user_id` exists before saving the config.
 
-`paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers Codex hooks in the user-level Codex config.
+`paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers selected agent integrations. Codex hooks are registered in the user-level Codex config. Pi support is installed as a Pi extension.
 
 `paxm history` reads local telemetry metrics and summarizes recall frequency,
 hits, hook insertions, writes, provider errors, and storage usage. It breaks
@@ -292,6 +311,18 @@ item to the in-memory hook buffer. `session_start` appends a write item.
 profile. The buffer lives in a short-lived local daemon and is intentionally not
 durable. Codex may still require you to review and trust the new non-managed
 hooks with `/hooks` before they run.
+
+For Pi, setup writes one paxm hook shim and registers a Pi extension:
+
+```text
+~/.config/paxm/hooks/pi-user_input
+~/.pi/agent/extensions/paxm-hook/index.ts
+```
+
+The Pi extension listens for Pi's `before_agent_start` extension event and calls
+the paxm `user_input` hook shim. Pi v1 integration is recall-only: it can insert
+high-confidence passive recall results before the agent starts a turn, but it
+does not currently capture session start or turn-end writes.
 
 ## Releases
 

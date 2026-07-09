@@ -82,7 +82,8 @@ write profiles.
 
 ## Hook Behavior
 
-V1 installs three Codex hooks through `paxm setup`:
+V1 installs agent hook integrations through `paxm setup`. Codex has three
+built-in hook shims:
 
 ```text
 SessionStart      -> session_start
@@ -111,6 +112,19 @@ maximum inserted items, and optional query-term overlap.
 `turn_end` appends a write item and flushes the buffer to the configured write
 profile. The buffer is owned by a short-lived local Unix-socket daemon and lives
 only in process memory. It is intentionally not durable.
+
+Pi is integrated through Pi's extension system:
+
+```text
+before_agent_start -> user_input
+```
+
+Setup writes `~/.pi/agent/extensions/paxm-hook/index.ts`. The extension calls
+the generated paxm `pi-user_input` shim and returns a `paxm-memory-recall`
+message when the passive recall policy admits results. Pi v1 support is
+recall-only because the local Pi extension API path verified for this release is
+`before_agent_start`; session-start and turn-end capture are left out until Pi
+exposes stable extension events for those lifecycle points.
 
 ## Local Telemetry
 

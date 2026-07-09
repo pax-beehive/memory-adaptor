@@ -127,6 +127,25 @@ agents:
             flush: true
             flush_count: 10
 
+  pi:
+    enabled: false
+    active_recall:
+      enabled: true
+      profile: default
+      output: markdown
+    hooks:
+      user_input:
+        recall:
+          enabled: false
+          profile: passive
+          query_template: "{{ .prompt }}"
+          max_results: 2
+          output: markdown
+          insertion:
+            min_score: 0.8
+            max_items: 2
+            require_query_terms: true
+
 telemetry:
   enabled: true
   dir: ~/.local/state/paxm
@@ -196,10 +215,15 @@ write profile unless another profile is selected.
 
 ## Agents
 
-`agents.codex.active_recall` controls explicit recall calls.
+`agents.<name>.active_recall` controls explicit recall calls made by that agent
+or by a skill running inside that agent.
 
 `agents.codex.hooks.user_input.recall` controls passive recall from the Codex
 `UserPromptSubmit` hook.
+
+`agents.pi.hooks.user_input.recall` controls passive recall from Pi's
+`before_agent_start` extension event. Pi v1 support is recall-only, so there are
+no built-in Pi `session_start` or `turn_end` write hooks.
 
 Hook recall fields:
 

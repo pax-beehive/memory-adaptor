@@ -223,7 +223,7 @@ func (r runner) runSetup(args []string) error {
 	}
 	for name, agent := range cfg.Agents {
 		enabled := selectedHooks[name]
-		agent.Enabled = true
+		agent.Enabled = enabled
 		for eventName, eventCfg := range agent.Hooks {
 			if eventName == "user_input" {
 				eventCfg.Recall.Enabled = enabled
@@ -255,15 +255,23 @@ func (r runner) runSetup(args []string) error {
 		if err := removeLegacyHookShim(path, name); err != nil {
 			return err
 		}
-		for _, event := range installedHookEvents() {
+		installedScripts := make(map[string]string)
+		for _, event := range hookInstallEventsForTarget(name) {
 			scriptPath, err := installHookShim(path, name, event.ConfigEvent)
 			if err != nil {
 				return err
 			}
+			installedScripts[event.ConfigEvent] = scriptPath
 			fmt.Fprintf(r.stdout, "installed hook shim: %s\n", scriptPath)
 		}
 		if name == "codex" {
 			fmt.Fprintf(r.stdout, "registered Codex global hook: %s\n", codexConfigPath())
+		}
+		if name == "pi" {
+			if err := installPiGlobalHook(piExtensionPath(), installedScripts["user_input"]); err != nil {
+				return err
+			}
+			fmt.Fprintf(r.stdout, "registered Pi agent extension: %s\n", piExtensionPath())
 		}
 	}
 	return nil
@@ -577,13 +585,13 @@ func (r runner) runInternalHook(args []string) error {
 	if err != nil {
 		return err
 	}
-	bufferStarted := time.Now()
-	response, err := r.sendHookToBuffer(event)
-	if cfg, cfgErr := config.Load(r.configFile()); cfgErr == nil {
+	if cfg, cfgErr := config.Load(r.configFile()); cfgErr == nil && hookWriteEnabled(cfg, event) {
+		bufferStarted := time.Now()
+		response, err := r.sendHookToBuffer(event)
 		r.recordHookWriteTelemetry(cfg, event, response, time.Since(bufferStarted), err)
-	}
-	if err != nil {
-		fmt.Fprintf(r.stderr, "paxm hook buffer skipped: %s\n", err)
+		if err != nil {
+			fmt.Fprintf(r.stderr, "paxm hook buffer skipped: %s\n", err)
+		}
 	}
 	if event.Event == "user_input" {
 		return r.executeHook(event, *jsonOut)
@@ -1163,6 +1171,18 @@ func hookWriteProfile(cfg config.Config, event facade.HookEvent) string {
 	return "default"
 }
 
+func hookWriteEnabled(cfg config.Config, event facade.HookEvent) bool {
+	if event.Target == "" {
+		event.Target = "codex"
+	}
+	agent, ok := cfg.Agents[event.Target]
+	if !ok || !agent.Enabled {
+		return false
+	}
+	hook, ok := agent.Hooks[event.Event]
+	return ok && hook.Write.Enabled
+}
+
 func telemetryError(err error) string {
 	if err == nil {
 		return ""
@@ -1630,6 +1650,14 @@ func installedHookEvents() []hookInstallEvent {
 	}
 }
 
+func hookInstallEventsForTarget(target string) []hookInstallEvent {
+	if target == "pi" {
+		event, _ := hookInstallEventByConfig("user_input")
+		return []hookInstallEvent{event}
+	}
+	return installedHookEvents()
+}
+
 func hookInstallEventByConfig(configEvent string) (hookInstallEvent, bool) {
 	for _, event := range installedHookEvents() {
 		if event.ConfigEvent == configEvent {
@@ -1678,6 +1706,127 @@ func codexConfigPath() string {
 		codexHome = filepath.Join(home, ".codex")
 	}
 	return filepath.Join(config.ExpandPath(codexHome), "config.toml")
+}
+
+func piAgentDir() string {
+	if path := os.Getenv("PAXM_PI_AGENT_DIR"); path != "" {
+		return config.ExpandPath(path)
+	}
+	if path := os.Getenv("PI_CODING_AGENT_DIR"); path != "" {
+		return config.ExpandPath(path)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".pi", "agent")
+	}
+	return filepath.Join(home, ".pi", "agent")
+}
+
+func piExtensionPath() string {
+	return filepath.Join(piAgentDir(), "extensions", "paxm-hook", "index.ts")
+}
+
+func installPiGlobalHook(path, scriptPath string) error {
+	if strings.TrimSpace(scriptPath) == "" {
+		return errors.New("pi hook requires a user_input hook shim")
+	}
+	path = config.ExpandPath(path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(piHookExtensionSource(scriptPath)), 0o644)
+}
+
+func piHookExtensionSource(scriptPath string) string {
+	scriptLiteral := jsonStringLiteral(config.ExpandPath(scriptPath))
+	return `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { spawnSync } from "node:child_process";
+
+const paxmHookCommand = ` + scriptLiteral + `;
+
+function currentSessionId(ctx: any): string {
+  const sessionFile = ctx.sessionManager?.getSessionFile?.();
+  if (typeof sessionFile !== "string") return "";
+  const fileName = sessionFile.split(/[\\/]/).pop() ?? "";
+  const timestamped = fileName.match(/^\d{4}-\d{2}-\d{2}T[^_]+_(.+)\.jsonl$/i);
+  if (timestamped?.[1]) return timestamped[1];
+  return fileName.replace(/\.jsonl$/i, "");
+}
+
+function formatPaxmRecall(raw: string): string {
+  if (raw.trim() === "") return "";
+  try {
+    const result = JSON.parse(raw);
+    if (result?.skipped || !result?.recall?.hits?.length) return "";
+    const lines = ["paxm memory recall:"];
+    for (const hit of result.recall.hits) {
+      const score = typeof hit.score === "number" ? hit.score.toFixed(4) : "n/a";
+      const provider = hit.provider ? String(hit.provider) : "unknown";
+      const text = hit.text ? String(hit.text).trim() : "";
+      if (text === "") continue;
+      lines.push("- [" + provider + " score=" + score + "] " + text);
+    }
+    return lines.length > 1 ? lines.join("\n") : "";
+  } catch {
+    return raw.trim();
+  }
+}
+
+export default function (pi: ExtensionAPI) {
+  pi.on("before_agent_start", async (event, ctx) => {
+    const payload = JSON.stringify({
+      schema_version: "paxm.pi.user_input.v1",
+      target: "pi",
+      event: "user_input",
+      agent: "pi",
+      session_id: currentSessionId(ctx),
+      cwd: ctx.cwd,
+      workspace: ctx.cwd,
+      prompt: event.prompt,
+      source: "pi",
+    }) + "\n";
+
+    const result = spawnSync(paxmHookCommand, [], {
+      input: payload,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+
+    if (result.error) {
+      ctx.ui.notify(` + "`" + `paxm hook failed: ${result.error.message}` + "`" + `, "warning");
+      return;
+    }
+    if (result.status !== 0) {
+      const detail = (result.stderr || result.stdout || "Unknown paxm hook failure.").trim();
+      ctx.ui.notify(` + "`" + `paxm hook failed: ${detail}` + "`" + `, "warning");
+      return;
+    }
+
+    const content = formatPaxmRecall(result.stdout);
+    if (content === "") return;
+
+    return {
+      message: {
+        customType: "paxm-memory-recall",
+        content,
+        display: true,
+        details: {
+          source: "paxm",
+          event: "user_input",
+        },
+      },
+    };
+  });
+}
+`
+}
+
+func jsonStringLiteral(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
 }
 
 func installCodexGlobalHook(path, scriptPath, configEvent string) error {

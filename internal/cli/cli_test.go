@@ -140,6 +140,105 @@ func TestCLISetupInteractiveProviderChoices(t *testing.T) {
 	assertWriteOnlyConfig(t, configPath)
 }
 
+func TestCLISetupInstallsPiHookExtension(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	piAgentDir := filepath.Join(t.TempDir(), "pi-agent")
+	t.Setenv("PAXM_PI_AGENT_DIR", piAgentDir)
+	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	setupInput := strings.NewReader("1\n/custom/memory.jsonl\n1\n1\n2\n")
+	if code := Main([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
+	}
+	output := stdout.String()
+	if strings.Count(output, "installed hook shim") != 1 {
+		t.Fatalf("pi setup should install one hook shim: %s", output)
+	}
+	if !strings.Contains(output, "pi-user_input") {
+		t.Fatalf("pi setup did not install user_input shim: %s", output)
+	}
+	if strings.Contains(output, "registered Codex global hook") {
+		t.Fatalf("pi setup should not register Codex: %s", output)
+	}
+	if !strings.Contains(output, "registered Pi agent extension") {
+		t.Fatalf("pi setup did not report extension registration: %s", output)
+	}
+
+	extensionPath := filepath.Join(piAgentDir, "extensions", "paxm-hook", "index.ts")
+	extension, err := os.ReadFile(extensionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionText := string(extension)
+	for _, expected := range []string{
+		`pi.on("before_agent_start"`,
+		`schema_version: "paxm.pi.user_input.v1"`,
+		`target: "pi"`,
+		`event: "user_input"`,
+		`customType: "paxm-memory-recall"`,
+		`pi-user_input`,
+	} {
+		if !strings.Contains(extensionText, expected) {
+			t.Fatalf("pi extension missing %q: %s", expected, extensionText)
+		}
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Agents["pi"].Hooks["user_input"].Recall.Enabled {
+		t.Fatalf("pi user_input recall should be enabled: %#v", cfg.Agents["pi"])
+	}
+	if !cfg.Agents["pi"].Enabled {
+		t.Fatalf("pi agent should be enabled: %#v", cfg.Agents["pi"])
+	}
+	if cfg.Agents["codex"].Enabled {
+		t.Fatalf("codex agent should be disabled when only pi is selected: %#v", cfg.Agents["codex"])
+	}
+	for eventName, hook := range cfg.Agents["codex"].Hooks {
+		if hook.Recall.Enabled || hook.Write.Enabled {
+			t.Fatalf("codex hook %s should be disabled: %#v", eventName, cfg.Agents["codex"])
+		}
+	}
+}
+
+func TestInternalHookDoesNotBufferWhenHookWriteDisabled(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	cfg.Providers["local"] = config.ProviderConfig{
+		Type:    "local",
+		Enabled: true,
+		Path:    filepath.Join(t.TempDir(), "memory.jsonl"),
+	}
+	pi := cfg.Agents["pi"]
+	pi.Enabled = true
+	hook := pi.Hooks["user_input"]
+	hook.Recall.Enabled = true
+	hook.Write.Enabled = false
+	pi.Hooks["user_input"] = hook
+	cfg.Agents["pi"] = pi
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	event := strings.NewReader(`{"prompt":"recall only","workspace":"/tmp/project"}`)
+	code := Main([]string{"--config", configPath, "__hook", "--target", "pi", "--event", "user_input", "--json"}, event, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("hook failed with code %d: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "hook buffer skipped") {
+		t.Fatalf("recall-only hook should not touch buffer: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"target": "pi"`) {
+		t.Fatalf("unexpected hook output: %s", stdout.String())
+	}
+}
+
 func TestCLISetupInteractiveZepProvider(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
@@ -373,6 +472,9 @@ func assertWriteOnlyConfig(t *testing.T, configPath string) {
 	writeProfile := cfg.WriteProfiles["default"]
 	if len(writeProfile.Providers) != 1 || writeProfile.Providers[0].Name != "local" || !writeProfile.Providers[0].Required {
 		t.Fatalf("unexpected default write profile: %#v", writeProfile)
+	}
+	if cfg.Agents["codex"].Enabled || cfg.Agents["pi"].Enabled {
+		t.Fatalf("agents should be disabled when no hooks are selected: %#v", cfg.Agents)
 	}
 	for eventName, hook := range cfg.Agents["codex"].Hooks {
 		if hook.Recall.Enabled || hook.Write.Enabled {

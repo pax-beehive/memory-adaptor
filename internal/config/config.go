@@ -291,6 +291,30 @@ func DefaultConfig(configPath string) Config {
 					},
 				},
 			},
+			"pi": {
+				Enabled: false,
+				ActiveRecall: ActiveRecallConfig{
+					Enabled: true,
+					Profile: "default",
+					Output:  "markdown",
+				},
+				Hooks: map[string]AgentHookConfig{
+					"user_input": {
+						Recall: HookRecallConfig{
+							Enabled:       false,
+							Profile:       "passive",
+							QueryTemplate: "{{ .prompt }}",
+							MaxResults:    2,
+							Output:        "markdown",
+							Insertion: HookInsertionConfig{
+								MinScore:          0.8,
+								MaxItems:          2,
+								RequireQueryTerms: true,
+							},
+						},
+					},
+				},
+			},
 		},
 		Telemetry: defaultTelemetryConfig(configPath),
 	}
