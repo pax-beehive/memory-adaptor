@@ -1,14 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"sort"
-	"strconv"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pax-beehive/memory-adaptor/internal/adapters"
@@ -67,10 +68,6 @@ func (r runner) run(args []string) error {
 		return r.runRecall(args[1:])
 	case "remember":
 		return r.runRemember(args[1:])
-	case "hook":
-		return r.runHook(args[1:])
-	case "provider":
-		return r.runProvider(args[1:])
 	case "config":
 		return r.runConfig(args[1:])
 	default:
@@ -82,19 +79,79 @@ func (r runner) runSetup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
 	force := fs.Bool("force", false, "overwrite an existing config")
+	yes := fs.Bool("yes", false, "accept default setup answers")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	path := r.configFile()
+	promptReader := bufio.NewReader(r.stdin)
 	if config.Exists(path) && !*force {
-		return fmt.Errorf("config already exists at %s; use --force to overwrite", path)
+		if *yes {
+			return fmt.Errorf("config already exists at %s; use --force to overwrite", path)
+		}
+		overwrite, err := promptBool(promptReader, r.stdout, fmt.Sprintf("Config already exists at %s. Overwrite?", path), false)
+		if err != nil {
+			return err
+		}
+		if !overwrite {
+			fmt.Fprintln(r.stdout, "setup cancelled")
+			return nil
+		}
 	}
 	cfg := config.DefaultConfig(path)
+	local := cfg.Providers["local"]
+	enableLocal := true
+	installCodexHook := true
+	if !*yes {
+		var err error
+		enableLocal, err = promptBool(promptReader, r.stdout, "Enable local memory provider?", true)
+		if err != nil {
+			return err
+		}
+		if enableLocal {
+			local.Path, err = promptString(promptReader, r.stdout, "Local memory path", local.Path)
+			if err != nil {
+				return err
+			}
+			local.Read, err = promptBool(promptReader, r.stdout, "Read from local provider?", true)
+			if err != nil {
+				return err
+			}
+			local.Write, err = promptBool(promptReader, r.stdout, "Write to local provider?", true)
+			if err != nil {
+				return err
+			}
+			local.Required, err = promptBool(promptReader, r.stdout, "Require local provider to succeed?", true)
+			if err != nil {
+				return err
+			}
+		}
+		installCodexHook, err = promptBool(promptReader, r.stdout, "Install Codex passive recall hook shim?", true)
+		if err != nil {
+			return err
+		}
+	}
+	local.Enabled = enableLocal
+	cfg.Providers["local"] = local
+	codexHook := cfg.Hooks["codex"]
+	codexHook.Enabled = installCodexHook
+	if eventCfg, ok := codexHook.Events["user_prompt"]; ok {
+		eventCfg.Recall.Enabled = installCodexHook
+		codexHook.Events["user_prompt"] = eventCfg
+	}
+	cfg.Hooks["codex"] = codexHook
 	if err := config.Save(path, cfg); err != nil {
 		return err
 	}
 	fmt.Fprintf(r.stdout, "created config: %s\n", path)
+	if installCodexHook {
+		scriptPath, err := installHookShim(path, "codex", "user_prompt")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(r.stdout, "installed hook shim: %s\n", scriptPath)
+	}
 	return nil
 }
 
@@ -106,8 +163,20 @@ func (r runner) runRecall(args []string) error {
 	limit := fs.Int("limit", 8, "maximum memories to return")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	stdin := fs.Bool("stdin", false, "read query from stdin")
+	hookEvent := fs.Bool("hook-event", false, "read a hook event from stdin")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *hookEvent {
+		var event facade.HookEvent
+		bytes, err := io.ReadAll(r.stdin)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(bytes, &event); err != nil {
+			return fmt.Errorf("decode hook event JSON: %w", err)
+		}
+		return r.executeHook(event, *jsonOut)
 	}
 	q := firstNonEmpty(*query, *queryShort)
 	if *stdin {
@@ -175,91 +244,6 @@ func (r runner) runRemember(args []string) error {
 	return nil
 }
 
-func (r runner) runHook(args []string) error {
-	if len(args) == 0 {
-		return errors.New("hook command requires a subcommand: run, test, install")
-	}
-	switch args[0] {
-	case "run":
-		return r.runHookRun(args[1:])
-	case "test":
-		return r.runHookTest(args[1:])
-	case "install":
-		return r.runHookInstall(args[1:])
-	default:
-		return fmt.Errorf("unknown hook subcommand %q", args[0])
-	}
-}
-
-func (r runner) runHookRun(args []string) error {
-	fs := flag.NewFlagSet("hook run", flag.ContinueOnError)
-	fs.SetOutput(r.stderr)
-	target := fs.String("target", "codex", "hook target")
-	eventName := fs.String("event", "user_prompt", "hook event")
-	prompt := fs.String("prompt", "", "prompt text")
-	workspace := fs.String("workspace", "", "workspace path")
-	jsonOut := fs.Bool("json", false, "write JSON")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	event := facade.HookEvent{
-		Target:    *target,
-		Event:     *eventName,
-		Prompt:    *prompt,
-		Workspace: *workspace,
-	}
-	if strings.TrimSpace(event.Prompt) == "" {
-		bytes, err := io.ReadAll(r.stdin)
-		if err != nil {
-			return err
-		}
-		if len(strings.TrimSpace(string(bytes))) > 0 {
-			if err := json.Unmarshal(bytes, &event); err != nil {
-				return fmt.Errorf("decode hook event JSON: %w", err)
-			}
-			if event.Target == "" {
-				event.Target = *target
-			}
-			if event.Event == "" {
-				event.Event = *eventName
-			}
-		}
-	}
-	return r.executeHook(event, *jsonOut)
-}
-
-func (r runner) runHookTest(args []string) error {
-	fs := flag.NewFlagSet("hook test", flag.ContinueOnError)
-	fs.SetOutput(r.stderr)
-	target := fs.String("target", "codex", "hook target")
-	eventName := fs.String("event", "user_prompt", "hook event")
-	prompt := fs.String("prompt", "what did we decide?", "prompt text")
-	workspace := fs.String("workspace", "", "workspace path")
-	jsonOut := fs.Bool("json", false, "write JSON")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	return r.executeHook(facade.HookEvent{
-		Target:    *target,
-		Event:     *eventName,
-		Prompt:    *prompt,
-		Workspace: *workspace,
-	}, *jsonOut)
-}
-
-func (r runner) runHookInstall(args []string) error {
-	fs := flag.NewFlagSet("hook install", flag.ContinueOnError)
-	fs.SetOutput(r.stderr)
-	target := fs.String("target", "codex", "hook target")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.stdout, "hook target: %s\n", *target)
-	fmt.Fprintf(r.stdout, "command: paxm --config %s hook run --target %s --event user_prompt\n", r.configFile(), *target)
-	return nil
-}
-
 func (r runner) executeHook(event facade.HookEvent, jsonOut bool) error {
 	service, err := r.loadService()
 	if err != nil {
@@ -276,128 +260,6 @@ func (r runner) executeHook(event facade.HookEvent, jsonOut bool) error {
 		return nil
 	}
 	writeRecallMarkdown(r.stdout, *result.Recall)
-	return nil
-}
-
-func (r runner) runProvider(args []string) error {
-	if len(args) == 0 {
-		return errors.New("provider command requires a subcommand: list, enable, disable")
-	}
-	switch args[0] {
-	case "list":
-		return r.runProviderList(args[1:])
-	case "enable":
-		return r.runProviderEnable(args[1:])
-	case "disable":
-		return r.runProviderDisable(args[1:])
-	default:
-		return fmt.Errorf("unknown provider subcommand %q", args[0])
-	}
-}
-
-func (r runner) runProviderList(args []string) error {
-	fs := flag.NewFlagSet("provider list", flag.ContinueOnError)
-	fs.SetOutput(r.stderr)
-	jsonOut := fs.Bool("json", false, "write JSON")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := config.Load(r.configFile())
-	if err != nil {
-		return err
-	}
-	if *jsonOut {
-		return writeJSON(r.stdout, cfg.Providers)
-	}
-
-	var names []string
-	for name := range cfg.Providers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	fmt.Fprintln(r.stdout, "NAME\tTYPE\tENABLED\tREAD\tWRITE\tREQUIRED")
-	for _, name := range names {
-		provider := cfg.Providers[name]
-		fmt.Fprintf(r.stdout, "%s\t%s\t%t\t%t\t%t\t%t\n", name, provider.Type, provider.Enabled, provider.Read, provider.Write, provider.Required)
-	}
-	return nil
-}
-
-func (r runner) runProviderEnable(args []string) error {
-	name, flagArgs, err := splitSingleProviderName(args)
-	if err != nil {
-		return err
-	}
-	fs := flag.NewFlagSet("provider enable", flag.ContinueOnError)
-	fs.SetOutput(r.stderr)
-	var read optionalBool
-	var write optionalBool
-	var required optionalBool
-	fs.Var(&read, "read", "set read capability")
-	fs.Var(&write, "write", "set write capability")
-	fs.Var(&required, "required", "set required status")
-	if err := fs.Parse(flagArgs); err != nil {
-		return err
-	}
-	if name == "" {
-		return errors.New("provider enable requires a provider name")
-	}
-
-	cfg, err := config.Load(r.configFile())
-	if err != nil {
-		return err
-	}
-	provider, ok := cfg.Providers[name]
-	if !ok {
-		return fmt.Errorf("unknown provider %q", name)
-	}
-	provider.Enabled = true
-	if read.set {
-		provider.Read = read.value
-	}
-	if write.set {
-		provider.Write = write.value
-	}
-	if !read.set && !write.set && !provider.Read && !provider.Write {
-		provider.Read = true
-		provider.Write = true
-	}
-	if required.set {
-		provider.Required = required.value
-	}
-	cfg.Providers[name] = provider
-	if err := config.Save(r.configFile(), cfg); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.stdout, "enabled provider: %s\n", name)
-	return nil
-}
-
-func (r runner) runProviderDisable(args []string) error {
-	fs := flag.NewFlagSet("provider disable", flag.ContinueOnError)
-	fs.SetOutput(r.stderr)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		return errors.New("provider disable requires a provider name")
-	}
-
-	cfg, err := config.Load(r.configFile())
-	if err != nil {
-		return err
-	}
-	name := fs.Arg(0)
-	provider, ok := cfg.Providers[name]
-	if !ok {
-		return fmt.Errorf("unknown provider %q", name)
-	}
-	provider.Enabled = false
-	cfg.Providers[name] = provider
-	if err := config.Save(r.configFile(), cfg); err != nil {
-		return err
-	}
-	fmt.Fprintf(r.stdout, "disabled provider: %s\n", name)
 	return nil
 }
 
@@ -483,9 +345,73 @@ func (r runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] setup")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] recall --query TEXT [--json]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] remember --text TEXT")
-	fmt.Fprintln(r.stdout, "  paxm [--config PATH] hook run --target codex --event user_prompt")
-	fmt.Fprintln(r.stdout, "  paxm [--config PATH] provider list")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] config doctor")
+}
+
+func promptBool(reader *bufio.Reader, writer io.Writer, question string, defaultValue bool) (bool, error) {
+	suffix := " [y/N]: "
+	if defaultValue {
+		suffix = " [Y/n]: "
+	}
+	for {
+		fmt.Fprint(writer, question+suffix)
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		value := strings.ToLower(strings.TrimSpace(line))
+		if value == "" {
+			return defaultValue, nil
+		}
+		switch value {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(writer, "Please answer yes or no.")
+		}
+		if errors.Is(err, io.EOF) {
+			return defaultValue, nil
+		}
+	}
+}
+
+func promptString(reader *bufio.Reader, writer io.Writer, question, defaultValue string) (string, error) {
+	fmt.Fprintf(writer, "%s [%s]: ", question, defaultValue)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	value := strings.TrimSpace(line)
+	if value == "" {
+		return defaultValue, nil
+	}
+	return value, nil
+}
+
+func installHookShim(configPath, target, event string) (string, error) {
+	hooksDir := filepath.Join(filepath.Dir(config.ExpandPath(configPath)), "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return "", err
+	}
+	binaryPath, err := os.Executable()
+	if err != nil || binaryPath == "" {
+		binaryPath = "paxm"
+	}
+	scriptPath := filepath.Join(hooksDir, target+"-"+event)
+	script := "#!/bin/sh\nexec " + shellQuote(binaryPath) + " --config " + shellQuote(config.ExpandPath(configPath)) + " recall --hook-event --json\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		return "", err
+	}
+	return scriptPath, nil
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func extractConfigFlag(args []string) ([]string, string, error) {
@@ -539,43 +465,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func splitSingleProviderName(args []string) (string, []string, error) {
-	var name string
-	var flagArgs []string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			flagArgs = append(flagArgs, arg)
-			continue
-		}
-		if name != "" {
-			return "", nil, errors.New("provider enable accepts exactly one provider name")
-		}
-		name = arg
-	}
-	return name, flagArgs, nil
-}
-
-type optionalBool struct {
-	value bool
-	set   bool
-}
-
-func (b *optionalBool) Set(value string) error {
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return err
-	}
-	b.value = parsed
-	b.set = true
-	return nil
-}
-
-func (b *optionalBool) String() string {
-	return strconv.FormatBool(b.value)
-}
-
-func (b *optionalBool) IsBoolFlag() bool {
-	return true
 }
