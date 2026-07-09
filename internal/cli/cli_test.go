@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 )
 
@@ -143,6 +145,34 @@ func TestCLISetupInteractiveZepProvider(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "installed hook shim") {
 		t.Fatalf("setup installed hook despite none selection: %s", stdout.String())
+	}
+}
+
+func TestCLISetupEnsuresZepUserTarget(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
+	originalEnsure := ensureZepUser
+	t.Cleanup(func() {
+		ensureZepUser = originalEnsure
+	})
+	var ensured config.ProviderConfig
+	ensureZepUser = func(_ context.Context, cfg config.ProviderConfig) (zepadapter.EnsureUserResult, error) {
+		ensured = cfg
+		return zepadapter.EnsureUserResult{UserID: cfg.UserID, Created: true}, nil
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	setupInput := strings.NewReader("2\nzep-key\n1\ntoddzheng\n6\n1\n2\nnone\n")
+	if code := Main([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
+	}
+
+	if ensured.UserID != "toddzheng" || ensured.APIKey != "zep-key" || ensured.GraphID != "" {
+		t.Fatalf("unexpected ensured zep config: %#v", ensured)
+	}
+	if !strings.Contains(stdout.String(), "ensured Zep user: toddzheng (created)") {
+		t.Fatalf("setup did not report ensured Zep user: %s", stdout.String())
 	}
 }
 

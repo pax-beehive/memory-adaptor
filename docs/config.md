@@ -129,7 +129,9 @@ Fields:
 - `source_description`: optional Zep source description for writes.
 
 V1 ships with `local` and `zep` provider adapters. Zep requires `api_key` and
-exactly one of `user_id` or `graph_id`.
+exactly one of `user_id` or `graph_id`. If setup is configured for a Zep user
+graph, it idempotently creates the configured `user_id` when the user does not
+already exist.
 
 ## Recall Profiles
 

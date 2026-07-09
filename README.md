@@ -157,7 +157,8 @@ failures fail the command.
 
 Remote provider configs may include a plain-text `api_key` field. Zep is
 supported with `type: zep` using `github.com/getzep/zep-go/v3`; configure
-exactly one of `user_id` or `graph_id`.
+exactly one of `user_id` or `graph_id`. When setup is configured for a Zep
+user graph, it ensures the configured `user_id` exists before saving the config.
 
 `paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers Codex hooks in the user-level Codex config.
 

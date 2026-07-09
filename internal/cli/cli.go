@@ -18,9 +18,12 @@ import (
 	"time"
 
 	"github.com/pax-beehive/memory-adaptor/internal/adapters"
+	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	"github.com/pax-beehive/memory-adaptor/internal/facade"
 )
+
+var ensureZepUser = zepadapter.EnsureUser
 
 type runner struct {
 	stdin      io.Reader
@@ -215,10 +218,21 @@ func (r runner) runSetup(args []string) error {
 		}
 		cfg.Agents[name] = agent
 	}
+	zepUserResult, err := maybeEnsureZepUser(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
 	if err := config.Save(path, cfg); err != nil {
 		return err
 	}
 	fmt.Fprintf(r.stdout, "created config: %s\n", path)
+	if zepUserResult != nil {
+		status := "exists"
+		if zepUserResult.Created {
+			status = "created"
+		}
+		fmt.Fprintf(r.stdout, "ensured Zep user: %s (%s)\n", zepUserResult.UserID, status)
+	}
 	for _, name := range sortedSelected(selectedHooks) {
 		if !selectedHooks[name] {
 			continue
@@ -238,6 +252,18 @@ func (r runner) runSetup(args []string) error {
 		}
 	}
 	return nil
+}
+
+func maybeEnsureZepUser(ctx context.Context, cfg config.Config) (*zepadapter.EnsureUserResult, error) {
+	provider, ok := cfg.Providers["zep"]
+	if !ok || !provider.Enabled || provider.Type != "zep" || strings.TrimSpace(provider.UserID) == "" {
+		return nil, nil
+	}
+	result, err := ensureZepUser(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func setupBaseConfig(path string, useExisting bool) (config.Config, error) {
