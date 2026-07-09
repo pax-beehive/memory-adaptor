@@ -130,5 +130,6 @@ prune daily buckets according to `retention_days`, so aggregate history does not
 grow without bound.
 
 Default events avoid storing raw query or memory text. They include query length,
-a query hash prefix, profile, hook event, hit/insert/write counts, provider
-names, provider error counts, and duration.
+a query hash prefix, profile, hook event, agent target, hit/insert/write counts,
+provider recall/write counts, provider hit/ref counts, provider error counts,
+and duration.

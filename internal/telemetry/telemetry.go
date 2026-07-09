@@ -40,6 +40,8 @@ type Event struct {
 	ItemCount            int                   `json:"item_count,omitempty"`
 	RefCount             int                   `json:"ref_count,omitempty"`
 	Flushed              int                   `json:"flushed,omitempty"`
+	ProviderRecalls      map[string]int        `json:"provider_recalls,omitempty"`
+	ProviderWrites       map[string]int        `json:"provider_writes,omitempty"`
 	ProviderHits         map[string]int        `json:"provider_hits,omitempty"`
 	ProviderRefs         map[string]int        `json:"provider_refs,omitempty"`
 	ProviderErrorDetails []ProviderErrorDetail `json:"provider_errors,omitempty"`
@@ -58,6 +60,7 @@ type Metrics struct {
 	FirstSeen  time.Time              `json:"first_seen,omitempty"`
 	Totals     Counter                `json:"totals"`
 	Daily      map[string]DailyMetric `json:"daily,omitempty"`
+	Agents     map[string]Counter     `json:"agents,omitempty"`
 	Profiles   map[string]Counter     `json:"profiles,omitempty"`
 	HookEvents map[string]Counter     `json:"hook_events,omitempty"`
 	Providers  map[string]Counter     `json:"providers,omitempty"`
@@ -65,6 +68,7 @@ type Metrics struct {
 
 type DailyMetric struct {
 	Counter    Counter            `json:"counter"`
+	Agents     map[string]Counter `json:"agents,omitempty"`
 	Profiles   map[string]Counter `json:"profiles,omitempty"`
 	HookEvents map[string]Counter `json:"hook_events,omitempty"`
 	Providers  map[string]Counter `json:"providers,omitempty"`
@@ -92,6 +96,7 @@ type HistorySummary struct {
 	Until      time.Time      `json:"until"`
 	Totals     Counter        `json:"totals"`
 	Daily      []DatedCounter `json:"daily,omitempty"`
+	Agents     []NamedCounter `json:"agents,omitempty"`
 	Profiles   []NamedCounter `json:"profiles,omitempty"`
 	HookEvents []NamedCounter `json:"hook_events,omitempty"`
 	Providers  []NamedCounter `json:"providers,omitempty"`
@@ -240,6 +245,7 @@ func (r *Recorder) History(days int) (HistorySummary, error) {
 		Storage: r.storageInfo(),
 	}
 	profiles := make(map[string]Counter)
+	agents := make(map[string]Counter)
 	hookEvents := make(map[string]Counter)
 	providers := make(map[string]Counter)
 	for i := 0; i < days; i++ {
@@ -250,10 +256,12 @@ func (r *Recorder) History(days int) (HistorySummary, error) {
 		}
 		summary.Totals.Add(day.Counter)
 		summary.Daily = append(summary.Daily, DatedCounter{Date: date, Counter: day.Counter})
+		addCounters(agents, day.Agents)
 		addCounters(profiles, day.Profiles)
 		addCounters(hookEvents, day.HookEvents)
 		addCounters(providers, day.Providers)
 	}
+	summary.Agents = sortedNamedCounters(agents)
 	summary.Profiles = sortedNamedCounters(profiles)
 	summary.HookEvents = sortedNamedCounters(hookEvents)
 	summary.Providers = sortedNamedCounters(providers)
@@ -275,6 +283,9 @@ func (m *Metrics) Update(event Event, retentionDays int) {
 	initMetricMaps(m)
 	eventCounter := counterForEvent(event)
 	m.Totals.Add(eventCounter)
+	if shouldAggregateAgent(event) {
+		m.Agents[event.Target] = addCounter(m.Agents[event.Target], eventCounter)
+	}
 	if event.Profile != "" {
 		m.Profiles[event.Profile] = addCounter(m.Profiles[event.Profile], eventCounter)
 	}
@@ -285,23 +296,17 @@ func (m *Metrics) Update(event Event, retentionDays int) {
 			m.HookEvents[key] = addCounter(m.HookEvents[key], eventCounter)
 		}
 	}
-	for provider, count := range event.ProviderHits {
-		counter := Counter{Events: 1, Hits: count}
+	for provider, counter := range providerCountersForEvent(event) {
 		m.Providers[provider] = addCounter(m.Providers[provider], counter)
-	}
-	for provider, count := range event.ProviderRefs {
-		counter := Counter{Events: 1, Refs: count}
-		m.Providers[provider] = addCounter(m.Providers[provider], counter)
-	}
-	for _, providerErr := range event.ProviderErrorDetails {
-		counter := Counter{Events: 1, ProviderErrors: 1, Errors: 1}
-		m.Providers[providerErr.Provider] = addCounter(m.Providers[providerErr.Provider], counter)
 	}
 
 	date := now.Format("2006-01-02")
 	day := m.Daily[date]
 	initDailyMaps(&day)
 	day.Counter.Add(eventCounter)
+	if shouldAggregateAgent(event) {
+		day.Agents[event.Target] = addCounter(day.Agents[event.Target], eventCounter)
+	}
 	if event.Profile != "" {
 		day.Profiles[event.Profile] = addCounter(day.Profiles[event.Profile], eventCounter)
 	}
@@ -312,14 +317,8 @@ func (m *Metrics) Update(event Event, retentionDays int) {
 			day.HookEvents[key] = addCounter(day.HookEvents[key], eventCounter)
 		}
 	}
-	for provider, count := range event.ProviderHits {
-		day.Providers[provider] = addCounter(day.Providers[provider], Counter{Events: 1, Hits: count})
-	}
-	for provider, count := range event.ProviderRefs {
-		day.Providers[provider] = addCounter(day.Providers[provider], Counter{Events: 1, Refs: count})
-	}
-	for _, providerErr := range event.ProviderErrorDetails {
-		day.Providers[providerErr.Provider] = addCounter(day.Providers[providerErr.Provider], Counter{Events: 1, ProviderErrors: 1, Errors: 1})
+	for provider, counter := range providerCountersForEvent(event) {
+		day.Providers[provider] = addCounter(day.Providers[provider], counter)
 	}
 	m.Daily[date] = day
 	m.Prune(retentionDays)
@@ -595,6 +594,49 @@ func counterForEvent(event Event) Counter {
 	return counter
 }
 
+func providerCountersForEvent(event Event) map[string]Counter {
+	counters := make(map[string]Counter)
+	for provider, count := range event.ProviderRecalls {
+		counter := counters[provider]
+		counter.Recalls += count
+		counters[provider] = counter
+	}
+	for provider, count := range event.ProviderWrites {
+		counter := counters[provider]
+		counter.Writes += count
+		counters[provider] = counter
+	}
+	for provider, count := range event.ProviderHits {
+		counter := counters[provider]
+		counter.Hits += count
+		counters[provider] = counter
+	}
+	for provider, count := range event.ProviderRefs {
+		counter := counters[provider]
+		counter.Refs += count
+		counters[provider] = counter
+	}
+	for _, providerErr := range event.ProviderErrorDetails {
+		counter := counters[providerErr.Provider]
+		counter.ProviderErrors++
+		counter.Errors++
+		counters[providerErr.Provider] = counter
+	}
+	for provider, counter := range counters {
+		if provider == "" {
+			delete(counters, provider)
+			continue
+		}
+		counter.Events = 1
+		counters[provider] = counter
+	}
+	return counters
+}
+
+func shouldAggregateAgent(event Event) bool {
+	return event.Source == "hook" && strings.TrimSpace(event.Target) != ""
+}
+
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -605,6 +647,9 @@ func boolInt(value bool) int {
 func initMetricMaps(metrics *Metrics) {
 	if metrics.Daily == nil {
 		metrics.Daily = make(map[string]DailyMetric)
+	}
+	if metrics.Agents == nil {
+		metrics.Agents = make(map[string]Counter)
 	}
 	if metrics.Profiles == nil {
 		metrics.Profiles = make(map[string]Counter)
@@ -620,6 +665,9 @@ func initMetricMaps(metrics *Metrics) {
 func initDailyMaps(day *DailyMetric) {
 	if day.Profiles == nil {
 		day.Profiles = make(map[string]Counter)
+	}
+	if day.Agents == nil {
+		day.Agents = make(map[string]Counter)
 	}
 	if day.HookEvents == nil {
 		day.HookEvents = make(map[string]Counter)

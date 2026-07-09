@@ -71,6 +71,10 @@ func New(cfg config.Config, router *memory.Router) *Service {
 	return &Service{cfg: config.Normalize(cfg), router: router}
 }
 
+func (s *Service) Config() config.Config {
+	return s.cfg
+}
+
 func (s *Service) Recall(ctx context.Context, input RecallInput) (RecallResult, error) {
 	query := strings.TrimSpace(input.Query)
 	if query == "" {

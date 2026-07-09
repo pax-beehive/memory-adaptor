@@ -249,6 +249,10 @@ Files:
   command, hook event, profile, hit count, provider names, duration, and errors.
 - `metrics_file`: compact aggregate JSON. It is overwritten on each telemetry
   update and is the source for `paxm history`.
+- Agent metrics aggregate passive hook recall and write counts by hook target,
+  such as `codex`.
+- Provider metrics aggregate recall calls, write calls, hits, refs, and provider
+  errors by provider name.
 
 Bounds:
 

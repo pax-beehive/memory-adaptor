@@ -197,9 +197,11 @@ user graph, it ensures the configured `user_id` exists before saving the config.
 `paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers Codex hooks in the user-level Codex config.
 
 `paxm history` reads local telemetry metrics and summarizes recall frequency,
-hits, hook insertions, writes, provider errors, and storage usage. Telemetry
-uses a bounded rolling JSONL event log plus a compact metrics JSON file. By
-default it records query length and a query hash, not raw query text.
+hits, hook insertions, writes, provider errors, and storage usage. It breaks
+down passive hook recall/write counts by agent, and provider recall/write counts
+by provider. Telemetry uses a bounded rolling JSONL event log plus a compact
+metrics JSON file. By default it records query length and a query hash, not raw
+query text.
 
 For Codex, setup writes a shim under the paxm config directory:
 

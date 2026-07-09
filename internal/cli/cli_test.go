@@ -105,8 +105,11 @@ func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
 		"by profile:",
 		"default",
 		"passive",
+		"by agent:",
+		"codex passive_recalls=1 passive_writes=0",
 		"by provider:",
-		"local",
+		"local recalls=2",
+		"writes=1",
 	} {
 		if !strings.Contains(history, expected) {
 			t.Fatalf("history missing %q: %s", expected, history)

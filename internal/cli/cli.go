@@ -540,10 +540,13 @@ type hookBufferRequest struct {
 }
 
 type hookBufferResponse struct {
-	OK       bool   `json:"ok"`
-	Buffered bool   `json:"buffered,omitempty"`
-	Flushed  int    `json:"flushed,omitempty"`
-	Error    string `json:"error,omitempty"`
+	OK             bool                   `json:"ok"`
+	Buffered       bool                   `json:"buffered,omitempty"`
+	Flushed        int                    `json:"flushed,omitempty"`
+	ProviderWrites map[string]int         `json:"provider_writes,omitempty"`
+	ProviderRefs   map[string]int         `json:"provider_refs,omitempty"`
+	ProviderErrors []memory.ProviderError `json:"provider_errors,omitempty"`
+	Error          string                 `json:"error,omitempty"`
 }
 
 func (r runner) runInternalHook(args []string) error {
@@ -664,12 +667,24 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 	}
 	bufferCfg := service.HookBufferConfig(event)
 	if !bufferCfg.Enabled {
-		_, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: []facade.IngestInput{item}})
+		result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: []facade.IngestInput{item}})
 		if err != nil {
-			_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
+			_ = writeJSON(conn, hookBufferResponse{
+				OK:             false,
+				Error:          err.Error(),
+				ProviderRefs:   telemetry.ProviderRefs(result.Refs),
+				ProviderErrors: result.ProviderErrors,
+			})
 			return 0, err
 		}
-		_ = writeJSON(conn, hookBufferResponse{OK: true, Buffered: true, Flushed: 1})
+		_ = writeJSON(conn, hookBufferResponse{
+			OK:             true,
+			Buffered:       true,
+			Flushed:        1,
+			ProviderWrites: writeProviderRoutes(service.Config(), item.Profile),
+			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
+			ProviderErrors: result.ProviderErrors,
+		})
 		return 1, nil
 	}
 	*buffer = append(*buffer, item)
@@ -679,13 +694,27 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 		return 0, nil
 	}
 	flushed := len(*buffer)
-	_, err = service.IngestBatch(ctx, facade.IngestBatchInput{Items: *buffer})
+	providerWrites := writeProviderRoutesForItems(service.Config(), *buffer)
+	result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: *buffer})
 	if err != nil {
-		_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
+		_ = writeJSON(conn, hookBufferResponse{
+			OK:             false,
+			Error:          err.Error(),
+			ProviderWrites: providerWrites,
+			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
+			ProviderErrors: result.ProviderErrors,
+		})
 		return 0, err
 	}
 	*buffer = nil
-	_ = writeJSON(conn, hookBufferResponse{OK: true, Buffered: true, Flushed: flushed})
+	_ = writeJSON(conn, hookBufferResponse{
+		OK:             true,
+		Buffered:       true,
+		Flushed:        flushed,
+		ProviderWrites: providerWrites,
+		ProviderRefs:   telemetry.ProviderRefs(result.Refs),
+		ProviderErrors: result.ProviderErrors,
+	})
 	return flushed, nil
 }
 
@@ -957,6 +986,7 @@ func (r runner) recordRecallTelemetry(cfg config.Config, kind, source, target, h
 		DurationMS:           duration.Milliseconds(),
 		HitCount:             len(result.Hits),
 		InsertedCount:        insertedCount(kind, result.Hits),
+		ProviderRecalls:      recallProviderRoutes(cfg, profile, skipped),
 		ProviderHits:         telemetry.ProviderHits(result.Hits),
 		ProviderErrorDetails: telemetry.ProviderErrors(result.ProviderErrors),
 		Error:                telemetryError(opErr),
@@ -977,6 +1007,7 @@ func (r runner) recordRememberTelemetry(cfg config.Config, kind, source, profile
 		DurationMS:           duration.Milliseconds(),
 		ItemCount:            itemCount,
 		RefCount:             len(result.Refs),
+		ProviderWrites:       writeProviderRoutes(cfg, profile),
 		ProviderRefs:         telemetry.ProviderRefs(result.Refs),
 		ProviderErrorDetails: telemetry.ProviderErrors(result.ProviderErrors),
 		Error:                telemetryError(opErr),
@@ -986,19 +1017,22 @@ func (r runner) recordRememberTelemetry(cfg config.Config, kind, source, profile
 
 func (r runner) recordHookWriteTelemetry(cfg config.Config, event facade.HookEvent, response hookBufferResponse, duration time.Duration, opErr error) {
 	telemetryEvent := telemetry.Event{
-		Time:       time.Now().UTC(),
-		Kind:       "hook_write",
-		Source:     "hook",
-		Command:    "hook",
-		Target:     event.Target,
-		HookEvent:  event.Event,
-		Profile:    hookWriteProfile(cfg, event),
-		Success:    opErr == nil,
-		Skipped:    opErr != nil || !response.Buffered,
-		DurationMS: duration.Milliseconds(),
-		ItemCount:  boolInt(response.Buffered),
-		Flushed:    response.Flushed,
-		Error:      telemetryError(opErr),
+		Time:                 time.Now().UTC(),
+		Kind:                 "hook_write",
+		Source:               "hook",
+		Command:              "hook",
+		Target:               event.Target,
+		HookEvent:            event.Event,
+		Profile:              hookWriteProfile(cfg, event),
+		Success:              opErr == nil,
+		Skipped:              opErr != nil || !response.Buffered,
+		DurationMS:           duration.Milliseconds(),
+		ItemCount:            boolInt(response.Buffered),
+		Flushed:              response.Flushed,
+		ProviderWrites:       response.ProviderWrites,
+		ProviderRefs:         response.ProviderRefs,
+		ProviderErrorDetails: telemetry.ProviderErrors(response.ProviderErrors),
+		Error:                telemetryError(opErr),
 	}
 	r.recordTelemetry(cfg, telemetryEvent)
 }
@@ -1039,6 +1073,54 @@ func effectiveWriteProfile(profile string) string {
 		return "default"
 	}
 	return profile
+}
+
+func recallProviderRoutes(cfg config.Config, profile string, skipped bool) map[string]int {
+	if skipped {
+		return nil
+	}
+	profile = effectiveRecallProfile(cfg, profile)
+	recallProfile, ok := cfg.RecallProfiles[profile]
+	if !ok {
+		return nil
+	}
+	return providerRouteCounts(recallProfile.Providers)
+}
+
+func writeProviderRoutes(cfg config.Config, profile string) map[string]int {
+	profile = effectiveWriteProfile(profile)
+	writeProfile, ok := cfg.WriteProfiles[profile]
+	if !ok {
+		return nil
+	}
+	return providerRouteCounts(writeProfile.Providers)
+}
+
+func writeProviderRoutesForItems(cfg config.Config, items []facade.IngestInput) map[string]int {
+	counts := make(map[string]int)
+	for _, item := range items {
+		for provider, count := range writeProviderRoutes(cfg, item.Profile) {
+			counts[provider] += count
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
+}
+
+func providerRouteCounts(routes []config.ProviderRouteConfig) map[string]int {
+	counts := make(map[string]int)
+	for _, route := range routes {
+		if strings.TrimSpace(route.Name) == "" {
+			continue
+		}
+		counts[route.Name]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func hookRecallProfile(cfg config.Config, event facade.HookEvent) string {
@@ -1867,11 +1949,14 @@ func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {
 	writeNamedCounters(w, "by profile:", summary.Profiles, func(counter telemetry.Counter) string {
 		return fmt.Sprintf("recalls=%d hits=%d inserted=%d writes=%d errors=%d", counter.Recalls, counter.Hits, counter.Inserted, counter.Writes, counter.Errors)
 	})
+	writeNamedCounters(w, "by agent:", summary.Agents, func(counter telemetry.Counter) string {
+		return fmt.Sprintf("passive_recalls=%d passive_writes=%d inserted=%d flushes=%d errors=%d", counter.Recalls, counter.Writes, counter.Inserted, counter.Flushes, counter.Errors)
+	})
 	writeNamedCounters(w, "by hook:", summary.HookEvents, func(counter telemetry.Counter) string {
 		return fmt.Sprintf("recalls=%d inserted=%d writes=%d flushes=%d errors=%d", counter.Recalls, counter.Inserted, counter.Writes, counter.Flushes, counter.Errors)
 	})
 	writeNamedCounters(w, "by provider:", summary.Providers, func(counter telemetry.Counter) string {
-		return fmt.Sprintf("hits=%d refs=%d provider_errors=%d", counter.Hits, counter.Refs, counter.ProviderErrors)
+		return fmt.Sprintf("recalls=%d hits=%d writes=%d refs=%d provider_errors=%d", counter.Recalls, counter.Hits, counter.Writes, counter.Refs, counter.ProviderErrors)
 	})
 }
 
