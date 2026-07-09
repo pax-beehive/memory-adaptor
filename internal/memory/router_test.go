@@ -103,6 +103,38 @@ func TestRouterIgnoresOptionalProviderErrors(t *testing.T) {
 	}
 }
 
+func TestRouterSearchAppliesPolicyThresholds(t *testing.T) {
+	t.Parallel()
+
+	router, err := NewRouter([]ProviderBinding{
+		{
+			Provider: fakeProvider{name: "a", hits: []MemoryHit{
+				{ID: "low", Text: "low relevance", Relevance: 0.2},
+				{ID: "high", Text: "high relevance", Relevance: 0.8},
+			}},
+			Read: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "relevance"}, SearchPolicy{
+		Providers:    []ProviderRoute{{Name: "a", Required: true, Weight: 0.5}},
+		MinRelevance: 0.25,
+		MinScore:     0.35,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].ID != "high" {
+		t.Fatalf("unexpected filtered hits: %#v", result.Hits)
+	}
+	if result.Hits[0].Score != 0.4 {
+		t.Fatalf("expected weighted final score, got %f", result.Hits[0].Score)
+	}
+}
+
 func TestRouterPutWritesToAllWritableProviders(t *testing.T) {
 	t.Parallel()
 

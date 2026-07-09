@@ -124,30 +124,19 @@ func (r runner) runSetup(args []string) error {
 				{ID: "read_write", Label: "read and write"},
 				{ID: "read_only", Label: "read only"},
 				{ID: "write_only", Label: "write only"},
-			}, "read_write")
+			}, currentProviderMode(cfg, "local"))
 			if err != nil {
 				return err
-			}
-			switch mode {
-			case "read_write":
-				local.Read = true
-				local.Write = true
-			case "read_only":
-				local.Read = true
-				local.Write = false
-			case "write_only":
-				local.Read = false
-				local.Write = true
 			}
 			policy, err := promptSingleSelect(promptReader, r.stdout, "Local provider failure policy", []setupOption{
 				{ID: "required", Label: "required"},
 				{ID: "best_effort", Label: "best effort"},
-			}, "required")
+			}, currentProviderPolicy(cfg, "local"))
 			if err != nil {
 				return err
 			}
-			local.Required = policy == "required"
 			cfg.Providers["local"] = local
+			setDefaultProviderMode(&cfg, "local", mode, policy == "required")
 		}
 		selectedHooks, err = promptMultiSelect(promptReader, r.stdout, "Select agent hooks to install", hookOptions(cfg), selectedHooks)
 		if err != nil {
@@ -161,15 +150,20 @@ func (r runner) runSetup(args []string) error {
 	for name, provider := range cfg.Providers {
 		provider.Enabled = selectedProviders[name]
 		cfg.Providers[name] = provider
-	}
-	for name, hook := range cfg.Hooks {
-		enabled := selectedHooks[name]
-		hook.Enabled = enabled
-		for eventName, eventCfg := range hook.Events {
-			eventCfg.Recall.Enabled = enabled
-			hook.Events[eventName] = eventCfg
+		if !provider.Enabled {
+			removeProviderFromDefaultProfiles(&cfg, name)
 		}
-		cfg.Hooks[name] = hook
+	}
+	for name, agent := range cfg.Agents {
+		enabled := selectedHooks[name]
+		agent.Enabled = true
+		for eventName, eventCfg := range agent.Hooks {
+			if eventName == "user_prompt" {
+				eventCfg.Recall.Enabled = enabled
+			}
+			agent.Hooks[eventName] = eventCfg
+		}
+		cfg.Agents[name] = agent
 	}
 	if err := config.Save(path, cfg); err != nil {
 		return err
@@ -206,9 +200,19 @@ func setupBaseConfig(path string, useExisting bool) (config.Config, error) {
 			cfg.Providers[name] = provider
 		}
 	}
-	for name, hook := range defaultCfg.Hooks {
-		if _, ok := cfg.Hooks[name]; !ok {
-			cfg.Hooks[name] = hook
+	for name, profile := range defaultCfg.RecallProfiles {
+		if _, ok := cfg.RecallProfiles[name]; !ok {
+			cfg.RecallProfiles[name] = profile
+		}
+	}
+	for name, profile := range defaultCfg.WriteProfiles {
+		if _, ok := cfg.WriteProfiles[name]; !ok {
+			cfg.WriteProfiles[name] = profile
+		}
+	}
+	for name, agent := range defaultCfg.Agents {
+		if _, ok := cfg.Agents[name]; !ok {
+			cfg.Agents[name] = agent
 		}
 	}
 	return cfg, nil
@@ -219,7 +223,8 @@ func (r runner) runRecall(args []string) error {
 	fs.SetOutput(r.stderr)
 	query := fs.String("query", "", "recall query")
 	queryShort := fs.String("q", "", "recall query")
-	limit := fs.Int("limit", 8, "maximum memories to return")
+	profile := fs.String("profile", "", "recall profile")
+	limit := fs.Int("limit", 0, "maximum memories to return")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	stdin := fs.Bool("stdin", false, "read query from stdin")
 	hookEvent := fs.Bool("hook-event", false, "read a hook event from stdin")
@@ -251,8 +256,9 @@ func (r runner) runRecall(args []string) error {
 		return err
 	}
 	result, err := service.Recall(context.Background(), facade.RecallInput{
-		Query: q,
-		Limit: *limit,
+		Query:   q,
+		Profile: *profile,
+		Limit:   *limit,
 	})
 	if err != nil {
 		return err
@@ -268,6 +274,7 @@ func (r runner) runRemember(args []string) error {
 	fs := flag.NewFlagSet("remember", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
 	text := fs.String("text", "", "memory text")
+	profile := fs.String("profile", "", "write profile")
 	source := fs.String("source", "cli", "memory source")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	stdin := fs.Bool("stdin", false, "read memory text from stdin")
@@ -288,8 +295,9 @@ func (r runner) runRemember(args []string) error {
 		return err
 	}
 	result, err := service.Ingest(context.Background(), facade.IngestInput{
-		Text:   value,
-		Source: *source,
+		Text:    value,
+		Profile: *profile,
+		Source:  *source,
 	})
 	if err != nil {
 		return err
@@ -431,8 +439,8 @@ func providerOptions(cfg config.Config) []setupOption {
 }
 
 func hookOptions(cfg config.Config) []setupOption {
-	names := make([]string, 0, len(cfg.Hooks))
-	for name := range cfg.Hooks {
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -453,10 +461,140 @@ func cfgProviderEnabled(cfg config.Config) map[string]bool {
 
 func cfgHookEnabled(cfg config.Config) map[string]bool {
 	selected := make(map[string]bool)
-	for name, hook := range cfg.Hooks {
-		selected[name] = hook.Enabled
+	for name, agent := range cfg.Agents {
+		hook, ok := agent.Hooks["user_prompt"]
+		selected[name] = ok && hook.Recall.Enabled
 	}
 	return selected
+}
+
+func currentProviderMode(cfg config.Config, provider string) string {
+	canRead := recallProfileHasProvider(cfg.RecallProfiles["default"], provider)
+	canWrite := writeProfileHasProvider(cfg.WriteProfiles["default"], provider)
+	switch {
+	case canRead && canWrite:
+		return "read_write"
+	case canRead:
+		return "read_only"
+	case canWrite:
+		return "write_only"
+	default:
+		return "read_write"
+	}
+}
+
+func currentProviderPolicy(cfg config.Config, provider string) string {
+	required, ok := providerRequiredInRecallProfile(cfg.RecallProfiles["default"], provider)
+	if !ok {
+		required, ok = providerRequiredInWriteProfile(cfg.WriteProfiles["default"], provider)
+	}
+	if ok && !required {
+		return "best_effort"
+	}
+	return "required"
+}
+
+func setDefaultProviderMode(cfg *config.Config, provider, mode string, required bool) {
+	switch mode {
+	case "read_only":
+		upsertRecallRoute(cfg, provider, required)
+		removeWriteRoute(cfg, provider)
+	case "write_only":
+		removeRecallRoute(cfg, provider)
+		upsertWriteRoute(cfg, provider, required)
+	default:
+		upsertRecallRoute(cfg, provider, required)
+		upsertWriteRoute(cfg, provider, required)
+	}
+}
+
+func removeProviderFromDefaultProfiles(cfg *config.Config, provider string) {
+	removeRecallRoute(cfg, provider)
+	removeWriteRoute(cfg, provider)
+}
+
+func recallProfileHasProvider(profile config.RecallProfileConfig, provider string) bool {
+	_, ok := providerRequiredInRecallProfile(profile, provider)
+	return ok
+}
+
+func writeProfileHasProvider(profile config.WriteProfileConfig, provider string) bool {
+	_, ok := providerRequiredInWriteProfile(profile, provider)
+	return ok
+}
+
+func providerRequiredInRecallProfile(profile config.RecallProfileConfig, provider string) (bool, bool) {
+	for _, route := range profile.Providers {
+		if route.Name == provider {
+			return route.Required, true
+		}
+	}
+	return false, false
+}
+
+func providerRequiredInWriteProfile(profile config.WriteProfileConfig, provider string) (bool, bool) {
+	for _, route := range profile.Providers {
+		if route.Name == provider {
+			return route.Required, true
+		}
+	}
+	return false, false
+}
+
+func upsertRecallRoute(cfg *config.Config, provider string, required bool) {
+	profile := cfg.RecallProfiles["default"]
+	for i, route := range profile.Providers {
+		if route.Name == provider {
+			route.Required = required
+			if route.Weight == 0 {
+				route.Weight = 1
+			}
+			profile.Providers[i] = route
+			cfg.RecallProfiles["default"] = profile
+			return
+		}
+	}
+	profile.Providers = append(profile.Providers, config.ProviderRouteConfig{Name: provider, Required: required, Weight: 1})
+	cfg.RecallProfiles["default"] = profile
+}
+
+func removeRecallRoute(cfg *config.Config, provider string) {
+	profile := cfg.RecallProfiles["default"]
+	profile.Providers = filterRoutes(profile.Providers, provider)
+	cfg.RecallProfiles["default"] = profile
+}
+
+func upsertWriteRoute(cfg *config.Config, provider string, required bool) {
+	profile := cfg.WriteProfiles["default"]
+	for i, route := range profile.Providers {
+		if route.Name == provider {
+			route.Required = required
+			if route.Weight == 0 {
+				route.Weight = 1
+			}
+			profile.Providers[i] = route
+			cfg.WriteProfiles["default"] = profile
+			return
+		}
+	}
+	profile.Providers = append(profile.Providers, config.ProviderRouteConfig{Name: provider, Required: required, Weight: 1})
+	cfg.WriteProfiles["default"] = profile
+}
+
+func removeWriteRoute(cfg *config.Config, provider string) {
+	profile := cfg.WriteProfiles["default"]
+	profile.Providers = filterRoutes(profile.Providers, provider)
+	cfg.WriteProfiles["default"] = profile
+}
+
+func filterRoutes(routes []config.ProviderRouteConfig, provider string) []config.ProviderRouteConfig {
+	filtered := routes[:0]
+	for _, route := range routes {
+		if route.Name != provider {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered
 }
 
 func defaultSelections(options []setupOption, selected map[string]bool) map[string]bool {

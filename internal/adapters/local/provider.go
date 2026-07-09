@@ -64,14 +64,18 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 		if query.Text != "" && score == 0 {
 			continue
 		}
+		rawScore := score
 		hits = append(hits, memory.MemoryHit{
-			Provider:  p.name,
-			ID:        item.ID,
-			Text:      item.Text,
-			Score:     score,
-			Source:    item.Source,
-			Metadata:  item.Metadata,
-			CreatedAt: item.CreatedAt,
+			Provider:     p.name,
+			ID:           item.ID,
+			Text:         item.Text,
+			Relevance:    score,
+			Score:        score,
+			RawScore:     &rawScore,
+			RawScoreKind: "keyword_ratio",
+			Source:       item.Source,
+			Metadata:     item.Metadata,
+			CreatedAt:    item.CreatedAt,
 		})
 	}
 	if err := scanner.Err(); err != nil {

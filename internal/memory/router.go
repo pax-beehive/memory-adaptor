@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ProviderBinding struct {
@@ -29,26 +30,51 @@ type PutResult struct {
 
 type Router struct {
 	providers []ProviderBinding
+	byName    map[string]ProviderBinding
 }
 
 func NewRouter(providers []ProviderBinding) (*Router, error) {
+	byName := make(map[string]ProviderBinding, len(providers))
 	for _, binding := range providers {
 		if binding.Provider == nil {
 			return nil, errors.New("memory router provider is nil")
 		}
+		name := binding.Provider.Name()
+		if name == "" {
+			return nil, errors.New("memory router provider name is empty")
+		}
+		if _, exists := byName[name]; exists {
+			return nil, fmt.Errorf("memory router provider %q is duplicated", name)
+		}
+		byName[name] = binding
 	}
-	return &Router{providers: append([]ProviderBinding(nil), providers...)}, nil
+	return &Router{providers: append([]ProviderBinding(nil), providers...), byName: byName}, nil
 }
 
 func (r *Router) Search(ctx context.Context, query SearchQuery) (SearchResult, error) {
+	return r.SearchWithPolicy(ctx, query, SearchPolicy{})
+}
+
+func (r *Router) SearchWithPolicy(ctx context.Context, query SearchQuery, policy SearchPolicy) (SearchResult, error) {
 	var readable []ProviderBinding
-	for _, binding := range r.providers {
-		if binding.Read {
-			readable = append(readable, binding)
+	var err error
+	if len(policy.Providers) > 0 {
+		readable, err = r.bindingsForRoutes(policy.Providers, "search")
+	} else {
+		for _, binding := range r.providers {
+			if binding.Read {
+				readable = append(readable, binding)
+			}
 		}
+	}
+	if err != nil {
+		return SearchResult{}, err
 	}
 	if len(readable) == 0 {
 		return SearchResult{}, errors.New("no readable memory providers are enabled")
+	}
+	if policy.Limit > 0 {
+		query.Limit = policy.Limit
 	}
 
 	type response struct {
@@ -94,7 +120,15 @@ func (r *Router) Search(ctx context.Context, query SearchQuery) (SearchResult, e
 		}
 		for _, hit := range res.hits {
 			hit.Provider = name
-			hit.Score = hit.Score * weight
+			relevance := normalizedRelevance(hit)
+			if relevance < policy.MinRelevance {
+				continue
+			}
+			hit.Relevance = relevance
+			hit.Score = relevance*weight + recencyScore(hit.CreatedAt, policy.RecencyBoost)
+			if hit.Score < policy.MinScore {
+				continue
+			}
 			key := dedupeKey(hit)
 			if _, exists := seen[key]; exists {
 				continue
@@ -120,11 +154,23 @@ func (r *Router) Search(ctx context.Context, query SearchQuery) (SearchResult, e
 }
 
 func (r *Router) Put(ctx context.Context, item MemoryItem) (PutResult, error) {
+	return r.PutWithPolicy(ctx, item, PutPolicy{})
+}
+
+func (r *Router) PutWithPolicy(ctx context.Context, item MemoryItem, policy PutPolicy) (PutResult, error) {
 	var writable []ProviderBinding
-	for _, binding := range r.providers {
-		if binding.Write {
-			writable = append(writable, binding)
+	var err error
+	if len(policy.Providers) > 0 {
+		writable, err = r.bindingsForRoutes(policy.Providers, "put")
+	} else {
+		for _, binding := range r.providers {
+			if binding.Write {
+				writable = append(writable, binding)
+			}
 		}
+	}
+	if err != nil {
+		return PutResult{}, err
 	}
 	if len(writable) == 0 {
 		return PutResult{}, errors.New("no writable memory providers are enabled")
@@ -176,6 +222,58 @@ func (r *Router) Put(ctx context.Context, item MemoryItem) (PutResult, error) {
 		return result.Refs[i].Provider < result.Refs[j].Provider
 	})
 	return result, nil
+}
+
+func (r *Router) bindingsForRoutes(routes []ProviderRoute, op string) ([]ProviderBinding, error) {
+	bindings := make([]ProviderBinding, 0, len(routes))
+	for _, route := range routes {
+		if strings.TrimSpace(route.Name) == "" {
+			continue
+		}
+		binding, ok := r.byName[route.Name]
+		if !ok {
+			return nil, fmt.Errorf("provider %q in %s policy is not enabled", route.Name, op)
+		}
+		binding.Required = route.Required
+		if route.Weight != 0 {
+			binding.Weight = route.Weight
+		} else if binding.Weight == 0 {
+			binding.Weight = 1
+		}
+		if op == "search" {
+			binding.Read = true
+		}
+		if op == "put" {
+			binding.Write = true
+		}
+		bindings = append(bindings, binding)
+	}
+	return bindings, nil
+}
+
+func normalizedRelevance(hit MemoryHit) float64 {
+	relevance := hit.Relevance
+	if relevance == 0 && hit.Score > 0 {
+		relevance = hit.Score
+	}
+	if relevance < 0 {
+		return 0
+	}
+	if relevance > 1 {
+		return 1
+	}
+	return relevance
+}
+
+func recencyScore(createdAt time.Time, boost float64) float64 {
+	if boost <= 0 || createdAt.IsZero() {
+		return 0
+	}
+	age := time.Since(createdAt)
+	if age < 0 {
+		return boost
+	}
+	return boost / (1 + age.Hours()/24)
 }
 
 func (r *Router) Health(ctx context.Context) ([]ProviderHealth, error) {

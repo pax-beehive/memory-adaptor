@@ -6,55 +6,119 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var ErrConfigMissing = errors.New("paxm config is missing")
 
 type Config struct {
-	Version   int                       `json:"version"`
-	Providers map[string]ProviderConfig `json:"providers"`
-	Hooks     map[string]HookConfig     `json:"hooks,omitempty"`
+	Version        int                            `json:"version" yaml:"version"`
+	Providers      map[string]ProviderConfig      `json:"providers" yaml:"providers"`
+	RecallProfiles map[string]RecallProfileConfig `json:"recall_profiles,omitempty" yaml:"recall_profiles,omitempty"`
+	WriteProfiles  map[string]WriteProfileConfig  `json:"write_profiles,omitempty" yaml:"write_profiles,omitempty"`
+	Agents         map[string]AgentConfig         `json:"agents,omitempty" yaml:"agents,omitempty"`
+
+	Hooks map[string]LegacyHookConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
 }
 
 type ProviderConfig struct {
-	Type      string  `json:"type"`
-	Enabled   bool    `json:"enabled"`
-	Read      bool    `json:"read"`
-	Write     bool    `json:"write"`
-	Required  bool    `json:"required"`
-	Path      string  `json:"path,omitempty"`
-	APIKeyEnv string  `json:"api_key_env,omitempty"`
-	Weight    float64 `json:"weight,omitempty"`
+	Type    string `json:"type" yaml:"type"`
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Path    string `json:"path,omitempty" yaml:"path,omitempty"`
+	APIKey  string `json:"api_key,omitempty" yaml:"api_key,omitempty"`
+
+	Read     *bool   `json:"read,omitempty" yaml:"read,omitempty"`
+	Write    *bool   `json:"write,omitempty" yaml:"write,omitempty"`
+	Required *bool   `json:"required,omitempty" yaml:"required,omitempty"`
+	Weight   float64 `json:"weight,omitempty" yaml:"weight,omitempty"`
 }
 
-type HookConfig struct {
-	Enabled bool                       `json:"enabled"`
-	Events  map[string]HookEventConfig `json:"events,omitempty"`
+type ProviderRouteConfig struct {
+	Name     string  `json:"name" yaml:"name"`
+	Required bool    `json:"required" yaml:"required"`
+	Weight   float64 `json:"weight,omitempty" yaml:"weight,omitempty"`
 }
 
-type HookEventConfig struct {
-	Recall HookRecallConfig `json:"recall"`
+type RecallProfileConfig struct {
+	Providers  []ProviderRouteConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
+	MaxResults int                   `json:"max_results,omitempty" yaml:"max_results,omitempty"`
+	Thresholds RecallThresholdConfig `json:"thresholds,omitempty" yaml:"thresholds,omitempty"`
+	Ranking    RankingConfig         `json:"ranking,omitempty" yaml:"ranking,omitempty"`
+}
+
+type RecallThresholdConfig struct {
+	MinRelevance float64 `json:"min_relevance,omitempty" yaml:"min_relevance,omitempty"`
+	MinScore     float64 `json:"min_score,omitempty" yaml:"min_score,omitempty"`
+}
+
+type RankingConfig struct {
+	Type         string  `json:"type,omitempty" yaml:"type,omitempty"`
+	RecencyBoost float64 `json:"recency_boost,omitempty" yaml:"recency_boost,omitempty"`
+}
+
+type WriteProfileConfig struct {
+	Providers []ProviderRouteConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
+}
+
+type AgentConfig struct {
+	Enabled      bool                       `json:"enabled" yaml:"enabled"`
+	ActiveRecall ActiveRecallConfig         `json:"active_recall,omitempty" yaml:"active_recall,omitempty"`
+	Hooks        map[string]AgentHookConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
+}
+
+type ActiveRecallConfig struct {
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Profile string `json:"profile,omitempty" yaml:"profile,omitempty"`
+	Output  string `json:"output,omitempty" yaml:"output,omitempty"`
+}
+
+type AgentHookConfig struct {
+	Recall HookRecallConfig `json:"recall,omitempty" yaml:"recall,omitempty"`
+	Write  HookWriteConfig  `json:"write,omitempty" yaml:"write,omitempty"`
 }
 
 type HookRecallConfig struct {
-	Enabled       bool   `json:"enabled"`
-	QueryTemplate string `json:"query_template,omitempty"`
-	MaxResults    int    `json:"max_results,omitempty"`
-	Output        string `json:"output,omitempty"`
+	Enabled       bool   `json:"enabled" yaml:"enabled"`
+	Profile       string `json:"profile,omitempty" yaml:"profile,omitempty"`
+	QueryTemplate string `json:"query_template,omitempty" yaml:"query_template,omitempty"`
+	MaxResults    int    `json:"max_results,omitempty" yaml:"max_results,omitempty"`
+	Output        string `json:"output,omitempty" yaml:"output,omitempty"`
+}
+
+type HookWriteConfig struct {
+	Enabled  bool   `json:"enabled" yaml:"enabled"`
+	Profile  string `json:"profile,omitempty" yaml:"profile,omitempty"`
+	Template string `json:"template,omitempty" yaml:"template,omitempty"`
+	Mode     string `json:"mode,omitempty" yaml:"mode,omitempty"`
+}
+
+type LegacyHookConfig struct {
+	Enabled bool                             `json:"enabled" yaml:"enabled"`
+	Events  map[string]LegacyHookEventConfig `json:"events,omitempty" yaml:"events,omitempty"`
+}
+
+type LegacyHookEventConfig struct {
+	Recall HookRecallConfig `json:"recall" yaml:"recall"`
 }
 
 func DefaultConfigPath() string {
 	if path := os.Getenv("PAXM_CONFIG"); path != "" {
 		return ExpandPath(path)
 	}
+	return filepath.Join(defaultConfigDir(), "config.yaml")
+}
+
+func defaultConfigDir() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(ExpandPath(dir), "paxm", "config.json")
+		return filepath.Join(ExpandPath(dir), "paxm")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return filepath.Join(".paxm", "config.json")
+		return ".paxm"
 	}
-	return filepath.Join(home, ".config", "paxm", "config.json")
+	return filepath.Join(home, ".config", "paxm")
 }
 
 func DefaultDataPath() string {
@@ -78,25 +142,55 @@ func DefaultConfig(configPath string) Config {
 		Version: 1,
 		Providers: map[string]ProviderConfig{
 			"local": {
-				Type:     "local",
-				Enabled:  true,
-				Read:     true,
-				Write:    true,
-				Required: true,
-				Path:     dataPath,
-				Weight:   1,
+				Type:    "local",
+				Enabled: true,
+				Path:    dataPath,
 			},
 		},
-		Hooks: map[string]HookConfig{
+		RecallProfiles: map[string]RecallProfileConfig{
+			"default": {
+				Providers: []ProviderRouteConfig{
+					{Name: "local", Required: true, Weight: 1},
+				},
+				MaxResults: 8,
+				Thresholds: RecallThresholdConfig{
+					MinRelevance: 0.25,
+					MinScore:     0.25,
+				},
+				Ranking: RankingConfig{
+					Type: "weighted_relevance",
+				},
+			},
+		},
+		WriteProfiles: map[string]WriteProfileConfig{
+			"default": {
+				Providers: []ProviderRouteConfig{
+					{Name: "local", Required: true},
+				},
+			},
+		},
+		Agents: map[string]AgentConfig{
 			"codex": {
 				Enabled: true,
-				Events: map[string]HookEventConfig{
+				ActiveRecall: ActiveRecallConfig{
+					Enabled: true,
+					Profile: "default",
+					Output:  "markdown",
+				},
+				Hooks: map[string]AgentHookConfig{
 					"user_prompt": {
 						Recall: HookRecallConfig{
 							Enabled:       true,
+							Profile:       "default",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    8,
 							Output:        "markdown",
+						},
+						Write: HookWriteConfig{
+							Enabled:  false,
+							Profile:  "default",
+							Template: "{{ .prompt }}",
+							Mode:     "prompt",
 						},
 					},
 				},
@@ -113,6 +207,17 @@ func Load(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			legacyPath := legacyJSONPath(path)
+			if legacyPath != path {
+				if legacyFile, legacyErr := os.Open(legacyPath); legacyErr == nil {
+					defer legacyFile.Close()
+					var cfg Config
+					if decodeErr := decodeConfig(legacyFile, legacyPath, &cfg); decodeErr != nil {
+						return Config{}, decodeErr
+					}
+					return Normalize(cfg), nil
+				}
+			}
 			return Config{}, fmt.Errorf("%w: %s", ErrConfigMissing, path)
 		}
 		return Config{}, err
@@ -120,7 +225,7 @@ func Load(path string) (Config, error) {
 	defer file.Close()
 
 	var cfg Config
-	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
+	if err := decodeConfig(file, path, &cfg); err != nil {
 		return Config{}, err
 	}
 	return Normalize(cfg), nil
@@ -140,16 +245,22 @@ func Save(path string, cfg Config) error {
 	}
 	defer file.Close()
 
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(Normalize(cfg))
+	return encodeConfig(file, path, Normalize(cfg))
 }
 
 func Exists(path string) bool {
 	if path == "" {
 		path = DefaultConfigPath()
 	}
-	_, err := os.Stat(ExpandPath(path))
+	path = ExpandPath(path)
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	legacyPath := legacyJSONPath(path)
+	if legacyPath == path {
+		return false
+	}
+	_, err := os.Stat(legacyPath)
 	return err == nil
 }
 
@@ -161,18 +272,216 @@ func Normalize(cfg Config) Config {
 		cfg.Providers = make(map[string]ProviderConfig)
 	}
 	for name, provider := range cfg.Providers {
-		if provider.Weight == 0 {
-			provider.Weight = 1
+		if provider.Type == "" {
+			provider.Type = name
 		}
 		if provider.Path != "" {
 			provider.Path = ExpandPath(provider.Path)
 		}
 		cfg.Providers[name] = provider
 	}
-	if cfg.Hooks == nil {
-		cfg.Hooks = make(map[string]HookConfig)
+	if len(cfg.RecallProfiles) == 0 {
+		cfg.RecallProfiles = map[string]RecallProfileConfig{
+			"default": legacyRecallProfile(cfg.Providers),
+		}
 	}
+	for name, profile := range cfg.RecallProfiles {
+		cfg.RecallProfiles[name] = normalizeRecallProfile(profile)
+	}
+	if len(cfg.WriteProfiles) == 0 {
+		cfg.WriteProfiles = map[string]WriteProfileConfig{
+			"default": legacyWriteProfile(cfg.Providers),
+		}
+	}
+	for name, profile := range cfg.WriteProfiles {
+		cfg.WriteProfiles[name] = normalizeWriteProfile(profile)
+	}
+	if len(cfg.Agents) == 0 {
+		cfg.Agents = legacyAgents(cfg.Hooks)
+	}
+	for name, agent := range cfg.Agents {
+		cfg.Agents[name] = normalizeAgent(agent)
+	}
+	for name, provider := range cfg.Providers {
+		provider.Read = nil
+		provider.Write = nil
+		provider.Required = nil
+		provider.Weight = 0
+		cfg.Providers[name] = provider
+	}
+	cfg.Hooks = nil
 	return cfg
+}
+
+func decodeConfig(file *os.File, path string, cfg *Config) error {
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		return json.NewDecoder(file).Decode(cfg)
+	}
+	decoder := yaml.NewDecoder(file)
+	decoder.KnownFields(false)
+	return decoder.Decode(cfg)
+}
+
+func encodeConfig(file *os.File, path string, cfg Config) error {
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		encoder := json.NewEncoder(file)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(cfg)
+	}
+	encoder := yaml.NewEncoder(file)
+	encoder.SetIndent(2)
+	defer encoder.Close()
+	return encoder.Encode(cfg)
+}
+
+func legacyJSONPath(path string) string {
+	if !strings.EqualFold(filepath.Base(path), "config.yaml") {
+		return path
+	}
+	return filepath.Join(filepath.Dir(path), "config.json")
+}
+
+func normalizeRecallProfile(profile RecallProfileConfig) RecallProfileConfig {
+	if profile.MaxResults == 0 {
+		profile.MaxResults = 8
+	}
+	if profile.Thresholds == (RecallThresholdConfig{}) {
+		profile.Thresholds = RecallThresholdConfig{
+			MinRelevance: 0.25,
+			MinScore:     0.25,
+		}
+	}
+	if profile.Ranking.Type == "" {
+		profile.Ranking.Type = "weighted_relevance"
+	}
+	for i, route := range profile.Providers {
+		profile.Providers[i] = normalizeProviderRoute(route)
+	}
+	return profile
+}
+
+func normalizeWriteProfile(profile WriteProfileConfig) WriteProfileConfig {
+	for i, route := range profile.Providers {
+		profile.Providers[i] = normalizeProviderRoute(route)
+	}
+	return profile
+}
+
+func normalizeProviderRoute(route ProviderRouteConfig) ProviderRouteConfig {
+	if route.Weight == 0 {
+		route.Weight = 1
+	}
+	return route
+}
+
+func normalizeAgent(agent AgentConfig) AgentConfig {
+	if agent.ActiveRecall.Profile == "" {
+		agent.ActiveRecall.Profile = "default"
+	}
+	if agent.ActiveRecall.Output == "" {
+		agent.ActiveRecall.Output = "markdown"
+	}
+	if agent.Hooks == nil {
+		agent.Hooks = make(map[string]AgentHookConfig)
+	}
+	for name, hook := range agent.Hooks {
+		if hook.Recall.Profile == "" {
+			hook.Recall.Profile = "default"
+		}
+		if hook.Recall.Output == "" {
+			hook.Recall.Output = "markdown"
+		}
+		if hook.Write.Profile == "" {
+			hook.Write.Profile = "default"
+		}
+		if hook.Write.Template == "" {
+			hook.Write.Template = "{{ .prompt }}"
+		}
+		if hook.Write.Mode == "" {
+			hook.Write.Mode = "prompt"
+		}
+		agent.Hooks[name] = hook
+	}
+	return agent
+}
+
+func legacyRecallProfile(providers map[string]ProviderConfig) RecallProfileConfig {
+	routes := make([]ProviderRouteConfig, 0, len(providers))
+	for name, provider := range providers {
+		if !provider.Enabled || !legacyBool(provider.Read, true) {
+			continue
+		}
+		routes = append(routes, ProviderRouteConfig{
+			Name:     name,
+			Required: legacyBool(provider.Required, true),
+			Weight:   legacyWeight(provider.Weight),
+		})
+	}
+	return normalizeRecallProfile(RecallProfileConfig{
+		Providers:  routes,
+		MaxResults: 8,
+		Thresholds: RecallThresholdConfig{
+			MinRelevance: 0.25,
+			MinScore:     0.25,
+		},
+		Ranking: RankingConfig{Type: "weighted_relevance"},
+	})
+}
+
+func legacyWriteProfile(providers map[string]ProviderConfig) WriteProfileConfig {
+	routes := make([]ProviderRouteConfig, 0, len(providers))
+	for name, provider := range providers {
+		if !provider.Enabled || !legacyBool(provider.Write, true) {
+			continue
+		}
+		routes = append(routes, ProviderRouteConfig{
+			Name:     name,
+			Required: legacyBool(provider.Required, true),
+			Weight:   legacyWeight(provider.Weight),
+		})
+	}
+	return normalizeWriteProfile(WriteProfileConfig{Providers: routes})
+}
+
+func legacyAgents(hooks map[string]LegacyHookConfig) map[string]AgentConfig {
+	if len(hooks) == 0 {
+		return DefaultConfig("").Agents
+	}
+	agents := make(map[string]AgentConfig, len(hooks))
+	for name, hook := range hooks {
+		agent := AgentConfig{
+			Enabled: hook.Enabled,
+			ActiveRecall: ActiveRecallConfig{
+				Enabled: true,
+				Profile: "default",
+				Output:  "markdown",
+			},
+			Hooks: make(map[string]AgentHookConfig),
+		}
+		for eventName, event := range hook.Events {
+			recall := event.Recall
+			if recall.Profile == "" {
+				recall.Profile = "default"
+			}
+			agent.Hooks[eventName] = AgentHookConfig{Recall: recall}
+		}
+		agents[name] = normalizeAgent(agent)
+	}
+	return agents
+}
+
+func legacyBool(value *bool, defaultValue bool) bool {
+	if value == nil {
+		return defaultValue
+	}
+	return *value
+}
+
+func legacyWeight(weight float64) float64 {
+	if weight == 0 {
+		return 1
+	}
+	return weight
 }
 
 func ExpandPath(path string) string {

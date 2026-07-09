@@ -18,9 +18,10 @@ type Service struct {
 }
 
 type RecallInput struct {
-	Query string            `json:"query"`
-	Limit int               `json:"limit,omitempty"`
-	Meta  map[string]string `json:"meta,omitempty"`
+	Query   string            `json:"query"`
+	Profile string            `json:"profile,omitempty"`
+	Limit   int               `json:"limit,omitempty"`
+	Meta    map[string]string `json:"meta,omitempty"`
 }
 
 type RecallResult struct {
@@ -31,6 +32,7 @@ type RecallResult struct {
 
 type IngestInput struct {
 	Text     string            `json:"text"`
+	Profile  string            `json:"profile,omitempty"`
 	Source   string            `json:"source,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
@@ -67,11 +69,14 @@ func (s *Service) Recall(ctx context.Context, input RecallInput) (RecallResult, 
 	if query == "" {
 		return RecallResult{}, errors.New("recall query is required")
 	}
-	searchResult, err := s.router.Search(ctx, memory.SearchQuery{
+	policy, err := s.searchPolicy(input.Profile, input.Limit)
+	if err != nil {
+		return RecallResult{}, err
+	}
+	searchResult, err := s.router.SearchWithPolicy(ctx, memory.SearchQuery{
 		Text:     query,
-		Limit:    input.Limit,
 		Metadata: input.Meta,
-	})
+	}, policy)
 	result := RecallResult{
 		Query:          query,
 		Hits:           searchResult.Hits,
@@ -85,12 +90,16 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 	if text == "" {
 		return IngestResult{}, errors.New("ingest text is required")
 	}
-	putResult, err := s.router.Put(ctx, memory.MemoryItem{
+	policy, err := s.putPolicy(input.Profile)
+	if err != nil {
+		return IngestResult{}, err
+	}
+	putResult, err := s.router.PutWithPolicy(ctx, memory.MemoryItem{
 		Text:      text,
 		Source:    input.Source,
 		Metadata:  input.Metadata,
 		CreatedAt: time.Now().UTC(),
-	})
+	}, policy)
 	result := IngestResult{
 		Refs:           putResult.Refs,
 		ProviderErrors: putResult.ProviderErrors,
@@ -107,12 +116,12 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 	}
 	result := HookResult{Target: event.Target, Event: event.Event}
 
-	hookCfg, ok := s.cfg.Hooks[event.Target]
-	if !ok || !hookCfg.Enabled {
+	agentCfg, ok := s.cfg.Agents[event.Target]
+	if !ok || !agentCfg.Enabled {
 		result.Skipped = true
 		return result, nil
 	}
-	eventCfg, ok := hookCfg.Events[event.Event]
+	eventCfg, ok := agentCfg.Hooks[event.Event]
 	if !ok || !eventCfg.Recall.Enabled {
 		result.Skipped = true
 		return result, nil
@@ -134,13 +143,71 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 		limit = eventCfg.Recall.MaxResults
 	}
 	recall, err := s.Recall(ctx, RecallInput{
-		Query: query,
-		Limit: limit,
-		Meta:  event.Metadata,
+		Query:   query,
+		Profile: eventCfg.Recall.Profile,
+		Limit:   limit,
+		Meta:    event.Metadata,
 	})
 	result.Query = recall.Query
 	result.Recall = &recall
 	return result, err
+}
+
+func (s *Service) searchPolicy(profileName string, limitOverride int) (memory.SearchPolicy, error) {
+	if strings.TrimSpace(profileName) == "" {
+		profileName = s.defaultActiveRecallProfile()
+	}
+	profile, ok := s.cfg.RecallProfiles[profileName]
+	if !ok {
+		return memory.SearchPolicy{}, fmtMissingProfile("recall", profileName)
+	}
+	limit := profile.MaxResults
+	if limitOverride > 0 {
+		limit = limitOverride
+	}
+	return memory.SearchPolicy{
+		Providers:    toMemoryRoutes(profile.Providers),
+		Limit:        limit,
+		MinRelevance: profile.Thresholds.MinRelevance,
+		MinScore:     profile.Thresholds.MinScore,
+		RecencyBoost: profile.Ranking.RecencyBoost,
+	}, nil
+}
+
+func (s *Service) putPolicy(profileName string) (memory.PutPolicy, error) {
+	if strings.TrimSpace(profileName) == "" {
+		profileName = "default"
+	}
+	profile, ok := s.cfg.WriteProfiles[profileName]
+	if !ok {
+		return memory.PutPolicy{}, fmtMissingProfile("write", profileName)
+	}
+	return memory.PutPolicy{Providers: toMemoryRoutes(profile.Providers)}, nil
+}
+
+func (s *Service) defaultActiveRecallProfile() string {
+	if agent, ok := s.cfg.Agents["codex"]; ok {
+		if agent.ActiveRecall.Enabled && strings.TrimSpace(agent.ActiveRecall.Profile) != "" {
+			return agent.ActiveRecall.Profile
+		}
+	}
+	return "default"
+}
+
+func toMemoryRoutes(routes []config.ProviderRouteConfig) []memory.ProviderRoute {
+	memoryRoutes := make([]memory.ProviderRoute, 0, len(routes))
+	for _, route := range routes {
+		memoryRoutes = append(memoryRoutes, memory.ProviderRoute{
+			Name:     route.Name,
+			Required: route.Required,
+			Weight:   route.Weight,
+		})
+	}
+	return memoryRoutes
+}
+
+func fmtMissingProfile(kind, name string) error {
+	return errors.New(kind + " profile " + name + " is not configured")
 }
 
 func renderHookQuery(queryTemplate string, event HookEvent) (string, error) {

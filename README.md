@@ -39,9 +39,9 @@ go build -o /tmp/paxm ./cmd/paxm
 For a project-local config during development:
 
 ```bash
-/tmp/paxm --config /tmp/paxm-dev/config.json setup --force
-/tmp/paxm --config /tmp/paxm-dev/config.json remember --text "enabled providers can read and write"
-printf '{"prompt":"enabled providers"}' | /tmp/paxm --config /tmp/paxm-dev/config.json recall --hook-event --json
+/tmp/paxm --config /tmp/paxm-dev/config.yaml setup --force
+/tmp/paxm --config /tmp/paxm-dev/config.yaml remember --text "enabled providers can read and write"
+printf '{"prompt":"enabled providers"}' | /tmp/paxm --config /tmp/paxm-dev/config.yaml recall --hook-event --json
 ```
 
 ## Config
@@ -49,29 +49,70 @@ printf '{"prompt":"enabled providers"}' | /tmp/paxm --config /tmp/paxm-dev/confi
 Default config path:
 
 ```text
-~/.config/paxm/config.json
+~/.config/paxm/config.yaml
 ```
 
 V1 ships with a local JSONL provider so the full flow works without external API keys.
+The CLI can load legacy JSON configs, but new setup writes YAML by default.
 
-```json
-{
-  "version": 1,
-  "providers": {
-    "local": {
-      "type": "local",
-      "enabled": true,
-      "read": true,
-      "write": true,
-      "required": true,
-      "path": "~/.local/share/paxm/memory.jsonl",
-      "weight": 1
-    }
-  }
-}
+```yaml
+version: 1
+
+providers:
+  local:
+    type: local
+    enabled: true
+    path: ~/.local/share/paxm/memory.jsonl
+
+recall_profiles:
+  default:
+    providers:
+      - name: local
+        required: true
+        weight: 1
+    max_results: 8
+    thresholds:
+      min_relevance: 0.25
+      min_score: 0.25
+    ranking:
+      type: weighted_relevance
+
+write_profiles:
+  default:
+    providers:
+      - name: local
+        required: true
+
+agents:
+  codex:
+    enabled: true
+    active_recall:
+      enabled: true
+      profile: default
+      output: markdown
+    hooks:
+      user_prompt:
+        recall:
+          enabled: true
+          profile: default
+          query_template: "{{ .prompt }}"
+          max_results: 8
+          output: markdown
+        write:
+          enabled: false
+          profile: default
+          template: "{{ .prompt }}"
+          mode: prompt
 ```
 
-Multiple enabled providers are supported by configuration. Read-enabled providers are queried concurrently. Write-enabled providers are written concurrently. Optional provider failures are returned as provider errors; required provider failures fail the command.
+Multiple enabled providers are supported by configuration. Recall profiles decide
+which providers are read, how provider relevance is weighted, and what
+thresholds are applied. Write profiles decide which providers are written.
+Optional provider failures are returned as provider errors; required provider
+failures fail the command.
+
+Remote provider configs may include a plain-text `api_key` field. The current
+V1 implementation only ships the `local` provider adapter.
 
 `paxm setup` is the interactive entry point for changing provider and hook choices. It uses numbered selectors for memory providers and agent hooks, then writes the paxm config, installs selected hook shims, and registers Codex hooks in the user-level Codex config.
 

@@ -39,13 +39,24 @@ func TestRunHookUsesExplicitQueryBeforeTemplate(t *testing.T) {
 	}
 	service := New(config.Config{
 		Version: 1,
-		Hooks: map[string]config.HookConfig{
+		RecallProfiles: map[string]config.RecallProfileConfig{
+			"default": {
+				Providers:  []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				MaxResults: 8,
+			},
+		},
+		Agents: map[string]config.AgentConfig{
 			"codex": {
 				Enabled: true,
-				Events: map[string]config.HookEventConfig{
+				ActiveRecall: config.ActiveRecallConfig{
+					Enabled: true,
+					Profile: "default",
+				},
+				Hooks: map[string]config.AgentHookConfig{
 					"user_prompt": {
 						Recall: config.HookRecallConfig{
 							Enabled:       true,
+							Profile:       "default",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    8,
 						},
@@ -66,5 +77,40 @@ func TestRunHookUsesExplicitQueryBeforeTemplate(t *testing.T) {
 	}
 	if provider.query != "explicit query" {
 		t.Fatalf("expected explicit query, got %q", provider.query)
+	}
+}
+
+func TestRecallUsesAgentActiveRecallProfile(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureProvider{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{
+		Version: 1,
+		RecallProfiles: map[string]config.RecallProfileConfig{
+			"active": {
+				Providers: []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"codex": {
+				Enabled: true,
+				ActiveRecall: config.ActiveRecallConfig{
+					Enabled: true,
+					Profile: "active",
+				},
+			},
+		},
+	}, router)
+
+	_, err = service.Recall(context.Background(), RecallInput{Query: "active query"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.query != "active query" {
+		t.Fatalf("active recall did not hit provider, got query %q", provider.query)
 	}
 }

@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pax-beehive/memory-adaptor/internal/config"
 )
 
 func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.json")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	codexConfigPath := filepath.Join(t.TempDir(), "codex.toml")
 	t.Setenv("PAXM_CODEX_CONFIG", codexConfigPath)
 	var stdout bytes.Buffer
@@ -73,7 +75,7 @@ func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
 }
 
 func TestCLISetupInteractiveProviderChoices(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.json")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -85,50 +87,18 @@ func TestCLISetupInteractiveProviderChoices(t *testing.T) {
 	if strings.Contains(stdout.String(), "installed hook shim") {
 		t.Fatalf("setup installed hook despite none selection: %s", stdout.String())
 	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := Main([]string{"--config", configPath, "config", "show"}, nil, &stdout, &stderr); code != 0 {
-		t.Fatalf("config show failed with code %d: %s", code, stderr.String())
-	}
-	output := stdout.String()
-	for _, want := range []string{
-		`"path": "/custom/memory.jsonl"`,
-		`"read": false`,
-		`"write": true`,
-		`"required": true`,
-		`"enabled": false`,
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("config output missing %q: %s", want, output)
-		}
-	}
+	assertWriteOnlyConfig(t, configPath)
 
 	stdout.Reset()
 	stderr.Reset()
 	if code := Main([]string{"--config", configPath, "setup", "--force", "--yes"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("force setup failed with code %d: %s", code, stderr.String())
 	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := Main([]string{"--config", configPath, "config", "show"}, nil, &stdout, &stderr); code != 0 {
-		t.Fatalf("config show after force failed with code %d: %s", code, stderr.String())
-	}
-	output = stdout.String()
-	for _, want := range []string{
-		`"path": "/custom/memory.jsonl"`,
-		`"read": false`,
-		`"write": true`,
-		`"required": true`,
-		`"enabled": false`,
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("force setup reset config; missing %q: %s", want, output)
-		}
-	}
+	assertWriteOnlyConfig(t, configPath)
 }
 
 func TestCLISetupRequiresAProvider(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.json")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -140,6 +110,38 @@ func TestCLISetupRequiresAProvider(t *testing.T) {
 	if !strings.Contains(stderr.String(), "setup requires at least one memory provider") {
 		t.Fatalf("unexpected setup error: %s", stderr.String())
 	}
+}
+
+func assertWriteOnlyConfig(t *testing.T, configPath string) {
+	t.Helper()
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := cfg.Providers["local"]
+	if local.Path != "/custom/memory.jsonl" {
+		t.Fatalf("unexpected local path: %q", local.Path)
+	}
+	if recallHasProvider(cfg, "local") {
+		t.Fatalf("local should not be in default recall profile: %#v", cfg.RecallProfiles["default"])
+	}
+	writeProfile := cfg.WriteProfiles["default"]
+	if len(writeProfile.Providers) != 1 || writeProfile.Providers[0].Name != "local" || !writeProfile.Providers[0].Required {
+		t.Fatalf("unexpected default write profile: %#v", writeProfile)
+	}
+	if cfg.Agents["codex"].Hooks["user_prompt"].Recall.Enabled {
+		t.Fatalf("codex user prompt recall should be disabled: %#v", cfg.Agents["codex"])
+	}
+}
+
+func recallHasProvider(cfg config.Config, provider string) bool {
+	for _, route := range cfg.RecallProfiles["default"].Providers {
+		if route.Name == provider {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInstallCodexGlobalHookPreservesExistingHooks(t *testing.T) {

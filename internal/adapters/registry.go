@@ -50,11 +50,29 @@ func (r Registry) BuildRouter(cfg config.Config) (*memory.Router, error) {
 		}
 		bindings = append(bindings, memory.ProviderBinding{
 			Provider: provider,
-			Read:     providerCfg.Read,
-			Write:    providerCfg.Write,
-			Required: providerCfg.Required,
-			Weight:   providerCfg.Weight,
+			Read:     true,
+			Write:    true,
+			Required: providerRequiredByAnyProfile(cfg, name),
+			Weight:   1,
 		})
 	}
 	return memory.NewRouter(bindings)
+}
+
+func providerRequiredByAnyProfile(cfg config.Config, providerName string) bool {
+	for _, profile := range cfg.RecallProfiles {
+		for _, route := range profile.Providers {
+			if route.Name == providerName && route.Required {
+				return true
+			}
+		}
+	}
+	for _, profile := range cfg.WriteProfiles {
+		for _, route := range profile.Providers {
+			if route.Name == providerName && route.Required {
+				return true
+			}
+		}
+	}
+	return false
 }
