@@ -143,7 +143,8 @@ and duration.
 - installs the Go version from `go.mod`;
 - runs `go test ./...`;
 - runs `scripts/build-release.sh`;
-- publishes the generated archives and `SHA256SUMS` to the GitHub release.
+- publishes the generated archives, `SHA256SUMS`, and `install.sh` to the
+  GitHub release.
 
 `scripts/build-release.sh` is the single packaging path for both local releases
 and GitHub Actions. It cross-compiles with `CGO_ENABLED=0`, injects the tag into
@@ -156,9 +157,15 @@ and GitHub Actions. It cross-compiles with `CGO_ENABLED=0`, injects the tag into
 - `windows/amd64`
 - `windows/arm64`
 
-Release artifacts are intentionally just the binary plus README. Runtime config,
-API keys, hook installation, and local telemetry files remain user-owned state
-created by `paxm setup` and normal CLI usage.
+Release archives intentionally contain just the binary plus README. Runtime
+config, API keys, hook installation, and local telemetry files remain user-owned
+state created by `paxm setup` and normal CLI usage.
+
+The installer is a small shell entrypoint over the same release artifacts. It
+prints the PAX banner, detects the local `darwin` or `linux` platform, downloads
+the matching archive from the latest or requested release, verifies
+`SHA256SUMS`, and writes only the `paxm` binary into the selected install
+directory.
 
 ## Self Update
 

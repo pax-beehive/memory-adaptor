@@ -49,4 +49,7 @@ for target in "${targets[@]}"; do
   rm -rf "$out_dir"
 done
 
+cp "$ROOT/scripts/install.sh" "$DIST/install.sh"
+chmod 0755 "$DIST/install.sh"
+
 (cd "$DIST" && shasum -a 256 paxm_*.tar.gz paxm_*.zip > SHA256SUMS)

@@ -39,4 +39,5 @@ jobs:
             dist/paxm_*.tar.gz
             dist/paxm_*.zip
             dist/SHA256SUMS
+            dist/install.sh
           generate_release_notes: true

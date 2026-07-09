@@ -37,9 +37,12 @@ paxm_v0.1.0_linux_arm64.tar.gz
 paxm_v0.1.0_windows_amd64.zip
 paxm_v0.1.0_windows_arm64.zip
 SHA256SUMS
+install.sh
 ```
 
 Each archive contains the `paxm` binary and the project README.
+`install.sh` is uploaded as a release asset so users can install with
+`curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh | bash`.
 
 ## Versioning
 
@@ -59,6 +62,14 @@ tar -xzf paxm_v0.1.0_darwin_arm64.tar.gz
 ```
 
 For Windows assets, use `unzip` instead of `tar`.
+
+Smoke test the installer against the release:
+
+```bash
+curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh -o /tmp/paxm-install.sh
+PAXM_INSTALL_DIR=/tmp/paxm-install-smoke bash /tmp/paxm-install.sh
+/tmp/paxm-install-smoke/paxm version
+```
 
 ## Self Update
 

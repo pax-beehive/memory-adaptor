@@ -2,6 +2,28 @@
 
 `paxm` is a Go CLI for giving agents a stable memory recall surface while leaving setup, API keys, hooks, and provider policy under user control.
 
+## Install
+
+Install the latest release for your local OS and architecture:
+
+```bash
+curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh | bash
+```
+
+The installer prints the PAX banner, detects `darwin` or `linux` plus
+`amd64` or `arm64`, downloads the matching release archive, verifies it against
+`SHA256SUMS`, and installs `paxm`.
+
+Useful overrides:
+
+```bash
+# Install a specific version.
+curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh | PAXM_VERSION=v0.1.1 bash
+
+# Install somewhere other than the default writable bin directory.
+curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh | PAXM_INSTALL_DIR="$HOME/go/bin" bash
+```
+
 ## V1 Shape
 
 ```text
@@ -33,10 +55,10 @@ cmd/paxm
 
 ## Quick Start
 
-Install from a GitHub release:
+Manual install from a GitHub release:
 
 ```bash
-VERSION=v0.1.0
+VERSION=v0.1.1
 curl -L "https://github.com/pax-beehive/memory-adaptor/releases/download/${VERSION}/paxm_${VERSION}_darwin_arm64.tar.gz" -o /tmp/paxm.tar.gz
 tar -xzf /tmp/paxm.tar.gz -C /tmp
 install /tmp/paxm_${VERSION}_darwin_arm64/paxm ~/go/bin/paxm
