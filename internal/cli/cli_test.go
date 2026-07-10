@@ -153,11 +153,14 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
 	}
 	output := stdout.String()
-	if strings.Count(output, "installed hook shim") != 1 {
-		t.Fatalf("pi setup should install one hook shim: %s", output)
+	if strings.Count(output, "installed hook shim") != 2 {
+		t.Fatalf("pi setup should install two hook shims: %s", output)
 	}
 	if !strings.Contains(output, "pi-user_input") {
 		t.Fatalf("pi setup did not install user_input shim: %s", output)
+	}
+	if !strings.Contains(output, "pi-turn_end") {
+		t.Fatalf("pi setup did not install turn_end shim: %s", output)
 	}
 	if strings.Contains(output, "registered Codex global hook") {
 		t.Fatalf("pi setup should not register Codex: %s", output)
@@ -174,11 +177,17 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 	extensionText := string(extension)
 	for _, expected := range []string{
 		`pi.on("before_agent_start"`,
+		`onRuntimeEvent("message_end"`,
+		`onRuntimeEvent("turn_end"`,
+		`onRuntimeEvent("session_shutdown"`,
 		`schema_version: "paxm.pi.user_input.v1"`,
+		`schema_version: "paxm.pi.turn_end.v1"`,
 		`target: "pi"`,
 		`event: "user_input"`,
+		`event: "turn_end"`,
 		`customType: "paxm-memory-recall"`,
 		`pi-user_input`,
+		`pi-turn_end`,
 	} {
 		if !strings.Contains(extensionText, expected) {
 			t.Fatalf("pi extension missing %q: %s", expected, extensionText)
@@ -191,6 +200,9 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 	}
 	if !cfg.Agents["pi"].Hooks["user_input"].Recall.Enabled {
 		t.Fatalf("pi user_input recall should be enabled: %#v", cfg.Agents["pi"])
+	}
+	if !cfg.Agents["pi"].Hooks["turn_end"].Write.Enabled || !cfg.Agents["pi"].Hooks["turn_end"].Write.Buffer.Flush {
+		t.Fatalf("pi turn_end write should be enabled and flush buffered writes: %#v", cfg.Agents["pi"].Hooks["turn_end"])
 	}
 	if !cfg.Agents["pi"].Enabled {
 		t.Fatalf("pi agent should be enabled: %#v", cfg.Agents["pi"])

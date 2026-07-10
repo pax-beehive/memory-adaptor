@@ -357,6 +357,19 @@ func DefaultConfig(configPath string) Config {
 							Initial: defaultInitialHookRecall(),
 						},
 					},
+					"turn_end": {
+						Write: HookWriteConfig{
+							Enabled:  true,
+							Profile:  "default",
+							Template: "Pi turn ended.\n\nEvent:\n{{ .raw_json }}",
+							Mode:     "turn_end",
+							Buffer: HookBufferConfig{
+								Enabled:    true,
+								Flush:      true,
+								FlushCount: 10,
+							},
+						},
+					},
 				},
 			},
 		},

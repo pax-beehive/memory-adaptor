@@ -63,6 +63,10 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if hook.Initial.Insertion.MinScore != 0.35 || hook.Initial.Insertion.MaxItems != 5 || hook.Initial.Insertion.RequireQueryTerms {
 		t.Fatalf("unexpected initial insertion policy: %#v", hook.Initial.Insertion)
 	}
+	piTurnEnd := cfg.Agents["pi"].Hooks["turn_end"].Write
+	if !piTurnEnd.Enabled || piTurnEnd.Profile != "default" || piTurnEnd.Mode != "turn_end" || !piTurnEnd.Buffer.Flush {
+		t.Fatalf("pi turn_end should default to best-effort buffered write: %#v", piTurnEnd)
+	}
 }
 
 func TestDefaultConfigEnablesBoundedTelemetry(t *testing.T) {

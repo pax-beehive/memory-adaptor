@@ -370,17 +370,21 @@ profile. The buffer lives in a short-lived local daemon and is intentionally not
 durable. Codex may still require you to review and trust the new non-managed
 hooks with `/hooks` before they run.
 
-For Pi, setup writes one paxm hook shim and registers a Pi extension:
+For Pi, setup writes paxm hook shims and registers a Pi extension:
 
 ```text
 ~/.config/paxm/hooks/pi-user_input
+~/.config/paxm/hooks/pi-turn_end
 ~/.pi/agent/extensions/paxm-hook/index.ts
 ```
 
 The Pi extension listens for Pi's `before_agent_start` extension event and calls
-the paxm `user_input` hook shim. Pi v1 integration is recall-only: it can insert
-high-confidence passive recall results before the agent starts a turn, but it
-does not currently capture session start or turn-end writes.
+the paxm `user_input` hook shim. It also buffers the current prompt and Pi
+`message_end` events in memory, then calls `pi-turn_end` on Pi's runtime
+`turn_end` event. A `session_shutdown` handler makes one final best-effort
+flush. Because Pi `message_end` and `turn_end` are runtime event-bus events
+rather than the typed `before_agent_start` surface, Pi passive writes are
+best-effort and should be verified with `paxm history`.
 
 ## Releases
 

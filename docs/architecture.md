@@ -159,14 +159,23 @@ Pi is integrated through Pi's extension system:
 
 ```text
 before_agent_start -> user_input
+message_end         -> extension-local turn buffer
+turn_end            -> turn_end
+session_shutdown    -> best-effort final turn_end flush
 ```
 
 Setup writes `~/.pi/agent/extensions/paxm-hook/index.ts`. The extension calls
 the generated paxm `pi-user_input` shim and returns a `paxm-memory-recall`
-message when the passive recall policy admits results. Pi v1 support is
-recall-only because the local Pi extension API path verified for this release is
-`before_agent_start`; session-start and turn-end capture are left out until Pi
-exposes stable extension events for those lifecycle points.
+message when the passive recall policy admits results. It also installs a
+generated `pi-turn_end` shim. The extension keeps a small in-memory buffer of
+the current prompt plus Pi `message_end` events, then sends that evidence to the
+`turn_end` hook and flushes paxm's hook buffer. `session_shutdown` makes one
+final best-effort flush for any messages that did not observe a `turn_end`.
+
+Pi `turn_end` and `message_end` are runtime event-bus events rather than the
+typed `before_agent_start` API surface, so this capture path is intentionally
+best-effort. Hook write failures are recorded by paxm telemetry when possible
+but do not block the Pi session.
 
 ## Local Telemetry
 

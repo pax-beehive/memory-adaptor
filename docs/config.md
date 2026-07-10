@@ -182,6 +182,20 @@ agents:
             insertion:
               min_score: 0.35
               max_items: 5
+      turn_end:
+        write:
+          enabled: true
+          profile: default
+          template: |
+            Pi turn ended.
+
+            Event:
+            {{ .raw_json }}
+          mode: turn_end
+          buffer:
+            enabled: true
+            flush: true
+            flush_count: 10
 
 telemetry:
   enabled: true
@@ -342,8 +356,14 @@ or by a skill running inside that agent.
 `UserPromptSubmit` hook.
 
 `agents.pi.hooks.user_input.recall` controls passive recall from Pi's
-`before_agent_start` extension event. Pi v1 support is recall-only, so there are
-no built-in Pi `session_start` or `turn_end` write hooks.
+`before_agent_start` extension event.
+
+`agents.pi.hooks.turn_end.write` controls best-effort passive writes from Pi.
+The generated Pi extension buffers the current prompt and `message_end` events
+in memory, then sends them to paxm on Pi's `turn_end` runtime event. It also
+tries one final flush on `session_shutdown`. Pi's `turn_end` event is used
+through the runtime event bus, so treat it as best-effort rather than a hard
+delivery guarantee.
 
 Hook recall fields:
 
@@ -360,7 +380,7 @@ Hook recall fields:
   recent session keys locally and applies this looser recall profile only once
   per target/session before falling back to the normal strict hook config.
 
-`agents.codex.hooks.*.write` controls passive hook writes. The built-in Codex
+`agents.<name>.hooks.*.write` controls passive hook writes. The built-in Codex
 event names are:
 
 - `session_start`: Codex `SessionStart`; writes a session-start event into the
@@ -368,6 +388,9 @@ event names are:
 - `user_input`: Codex `UserPromptSubmit`; returns recall output and writes the
   user input event into the buffer.
 - `turn_end`: Codex `Stop`; writes a turn-end event and flushes the buffer.
+
+For Pi, `turn_end` maps to Pi's runtime `turn_end` event and receives buffered
+Pi messages from the generated extension.
 
 Hook write fields:
 

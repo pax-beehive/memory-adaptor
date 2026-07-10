@@ -210,7 +210,7 @@ func (r runner) runSetup(args []string) error {
 			fmt.Fprintf(r.stdout, "registered Codex global hook: %s\n", codexConfigPath())
 		}
 		if name == "pi" {
-			if err := installPiGlobalHook(piExtensionPath(), installedScripts["user_input"]); err != nil {
+			if err := installPiGlobalHook(piExtensionPath(), installedScripts); err != nil {
 				return err
 			}
 			fmt.Fprintf(r.stdout, "registered Pi agent extension: %s\n", piExtensionPath())
@@ -1617,6 +1617,10 @@ func cfgProviderEnabled(cfg config.Config) map[string]bool {
 func cfgHookEnabled(cfg config.Config) map[string]bool {
 	selected := make(map[string]bool)
 	for name, agent := range cfg.Agents {
+		if !agent.Enabled {
+			selected[name] = false
+			continue
+		}
 		for _, hook := range agent.Hooks {
 			if hook.Recall.Enabled || hook.Write.Enabled {
 				selected[name] = true
@@ -2025,8 +2029,9 @@ func installedHookEvents() []hookInstallEvent {
 
 func hookInstallEventsForTarget(target string) []hookInstallEvent {
 	if target == "pi" {
-		event, _ := hookInstallEventByConfig("user_input")
-		return []hookInstallEvent{event}
+		userInput, _ := hookInstallEventByConfig("user_input")
+		turnEnd, _ := hookInstallEventByConfig("turn_end")
+		return []hookInstallEvent{userInput, turnEnd}
 	}
 	return installedHookEvents()
 }
@@ -2099,23 +2104,41 @@ func piExtensionPath() string {
 	return filepath.Join(piAgentDir(), "extensions", "paxm-hook", "index.ts")
 }
 
-func installPiGlobalHook(path, scriptPath string) error {
-	if strings.TrimSpace(scriptPath) == "" {
+func installPiGlobalHook(path string, scriptPaths map[string]string) error {
+	userInputScriptPath := strings.TrimSpace(scriptPaths["user_input"])
+	turnEndScriptPath := strings.TrimSpace(scriptPaths["turn_end"])
+	if userInputScriptPath == "" {
 		return errors.New("pi hook requires a user_input hook shim")
+	}
+	if turnEndScriptPath == "" {
+		return errors.New("pi hook requires a turn_end hook shim")
 	}
 	path = config.ExpandPath(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(piHookExtensionSource(scriptPath)), 0o644)
+	return os.WriteFile(path, []byte(piHookExtensionSource(userInputScriptPath, turnEndScriptPath)), 0o644)
 }
 
-func piHookExtensionSource(scriptPath string) string {
-	scriptLiteral := jsonStringLiteral(config.ExpandPath(scriptPath))
+func piHookExtensionSource(userInputScriptPath, turnEndScriptPath string) string {
+	userInputScriptLiteral := jsonStringLiteral(config.ExpandPath(userInputScriptPath))
+	turnEndScriptLiteral := jsonStringLiteral(config.ExpandPath(turnEndScriptPath))
 	return `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
 
-const paxmHookCommand = ` + scriptLiteral + `;
+const paxmUserInputHookCommand = ` + userInputScriptLiteral + `;
+const paxmTurnEndHookCommand = ` + turnEndScriptLiteral + `;
+const maxBufferedMessages = 20;
+
+type BufferedMessage = {
+  role: string;
+  text: string;
+  source: string;
+};
+
+let activeContext: any;
+let lastPrompt = "";
+let turnMessages: BufferedMessage[] = [];
 
 function currentSessionId(ctx: any): string {
   const sessionFile = ctx.sessionManager?.getSessionFile?.();
@@ -2124,6 +2147,98 @@ function currentSessionId(ctx: any): string {
   const timestamped = fileName.match(/^\d{4}-\d{2}-\d{2}T[^_]+_(.+)\.jsonl$/i);
   if (timestamped?.[1]) return timestamped[1];
   return fileName.replace(/\.jsonl$/i, "");
+}
+
+function currentWorkspace(ctx: any): string {
+  if (typeof ctx?.cwd === "string") return ctx.cwd;
+  return "";
+}
+
+function activeCtx(ctx: any): any {
+  if (ctx) activeContext = ctx;
+  return ctx ?? activeContext ?? {};
+}
+
+function textFromContent(content: any): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.content === "string") return part.content;
+      return "";
+    })
+    .filter((text) => text.trim() !== "")
+    .join("\n");
+}
+
+function appendBufferedMessage(role: string, text: string, source: string): void {
+  const trimmed = text.trim();
+  if (trimmed === "") return;
+  const last = turnMessages[turnMessages.length - 1];
+  if (last?.role === role && last.text === trimmed) return;
+  turnMessages.push({ role, text: trimmed, source });
+  if (turnMessages.length > maxBufferedMessages) {
+    turnMessages = turnMessages.slice(-maxBufferedMessages);
+  }
+}
+
+function appendPiMessage(message: any, source: string): void {
+  const role = typeof message?.role === "string" ? message.role : "unknown";
+  const text = textFromContent(message?.content) || (typeof message?.text === "string" ? message.text : "");
+  appendBufferedMessage(role, text, source);
+}
+
+function runPaxmHook(command: string, payload: unknown, ctx: any, notifyOnFailure: boolean): { ok: boolean; stdout: string } {
+  const result = spawnSync(command, [], {
+    input: JSON.stringify(payload) + "\n",
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+
+  if (result.error) {
+    if (notifyOnFailure) ctx?.ui?.notify?.(` + "`" + `paxm hook failed: ${result.error.message}` + "`" + `, "warning");
+    return { ok: false, stdout: "" };
+  }
+  if (result.status !== 0) {
+    if (notifyOnFailure) {
+      const detail = (result.stderr || result.stdout || "Unknown paxm hook failure.").trim();
+      ctx?.ui?.notify?.(` + "`" + `paxm hook failed: ${detail}` + "`" + `, "warning");
+    }
+    return { ok: false, stdout: result.stdout ?? "" };
+  }
+
+  return { ok: true, stdout: result.stdout ?? "" };
+}
+
+function flushTurn(triggerEvent: string, event: any, ctx: any): void {
+  const resolvedCtx = activeCtx(ctx);
+  const messages = turnMessages;
+  if (messages.length === 0 && lastPrompt.trim() === "") return;
+  turnMessages = [];
+
+  const payload = {
+    schema_version: "paxm.pi.turn_end.v1",
+    target: "pi",
+    event: "turn_end",
+    agent: "pi",
+    session_id: currentSessionId(resolvedCtx),
+    cwd: currentWorkspace(resolvedCtx),
+    workspace: currentWorkspace(resolvedCtx),
+    prompt: lastPrompt,
+    source: "pi",
+    trigger_event: triggerEvent,
+    messages,
+    raw_event: event,
+    metadata: {
+      pi_event: triggerEvent,
+      message_count: String(messages.length),
+    },
+  };
+
+  runPaxmHook(paxmTurnEndHookCommand, payload, resolvedCtx, false);
+  lastPrompt = "";
 }
 
 function formatPaxmRecall(raw: string): string {
@@ -2146,34 +2261,48 @@ function formatPaxmRecall(raw: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  const onRuntimeEvent = pi.on as unknown as (event: string, handler: (event: any, ctx: any) => unknown) => void;
+
+  onRuntimeEvent("session_start", (_event, ctx) => {
+    activeContext = ctx;
+    lastPrompt = "";
+    turnMessages = [];
+  });
+
+  onRuntimeEvent("message_end", (event, ctx) => {
+    activeCtx(ctx);
+    appendPiMessage(event?.message, "message_end");
+  });
+
+  onRuntimeEvent("turn_end", (event, ctx) => {
+    flushTurn("turn_end", event, ctx);
+  });
+
+  onRuntimeEvent("session_shutdown", (event, ctx) => {
+    flushTurn("session_shutdown", event, ctx);
+    lastPrompt = "";
+    turnMessages = [];
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
-    const payload = JSON.stringify({
+    const resolvedCtx = activeCtx(ctx);
+    lastPrompt = typeof event.prompt === "string" ? event.prompt : "";
+    appendBufferedMessage("user", lastPrompt, "before_agent_start");
+
+    const payload = {
       schema_version: "paxm.pi.user_input.v1",
       target: "pi",
       event: "user_input",
       agent: "pi",
-      session_id: currentSessionId(ctx),
-      cwd: ctx.cwd,
-      workspace: ctx.cwd,
+      session_id: currentSessionId(resolvedCtx),
+      cwd: currentWorkspace(resolvedCtx),
+      workspace: currentWorkspace(resolvedCtx),
       prompt: event.prompt,
       source: "pi",
-    }) + "\n";
+    };
 
-    const result = spawnSync(paxmHookCommand, [], {
-      input: payload,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-
-    if (result.error) {
-      ctx.ui.notify(` + "`" + `paxm hook failed: ${result.error.message}` + "`" + `, "warning");
-      return;
-    }
-    if (result.status !== 0) {
-      const detail = (result.stderr || result.stdout || "Unknown paxm hook failure.").trim();
-      ctx.ui.notify(` + "`" + `paxm hook failed: ${detail}` + "`" + `, "warning");
-      return;
-    }
+    const result = runPaxmHook(paxmUserInputHookCommand, payload, resolvedCtx, true);
+    if (!result.ok) return;
 
     const content = formatPaxmRecall(result.stdout);
     if (content === "") return;
