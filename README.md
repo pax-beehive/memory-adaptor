@@ -70,6 +70,10 @@ Hook passive recall:
 
 Local history:
   paxm history --days 7
+
+Historical session backfill:
+  paxm backfill scan --agent codex --before 2026-07-09
+  paxm backfill run --agent codex --provider mem0-company --background
 ```
 
 The CLI command layer does not talk to concrete memory providers directly. Commands call the facade, the facade calls the memory router, and the router fans out to enabled providers.
@@ -363,6 +367,34 @@ down passive hook recall/write counts by agent, and provider recall/write counts
 by provider. Telemetry uses a bounded rolling JSONL event log plus a compact
 metrics JSON file. By default it records query length and a query hash, not raw
 query text.
+
+`paxm backfill` imports local sessions created before passive integration into
+one exact provider instance. Built-in readers support Codex, Claude Code, and
+Pi. The default foreground mode prints progress, upload speed, and ETA. Add
+`--background` to start a silent detached worker, then inspect it with
+`paxm backfill status --agent AGENT --provider NAME`.
+
+```bash
+paxm backfill scan --agent codex --before 2026-07-09
+paxm backfill run --agent codex --provider mem0-company --rate 30/m
+paxm backfill run --agent claude --provider archive --rate 10/m --background
+paxm backfill status --agent claude --provider archive
+```
+
+Setup records `agents.<name>.passive_write_started_at` the first time passive
+write is enabled for an agent. Backfill uses that as its default exclusive cutoff. Configs created
+before this field existed must pass `--before` explicitly. Only user and
+assistant text is imported; system prompts, hidden reasoning, tool calls, tool
+results, sidechains, and attachments are excluded. Long turns are split into
+bounded items while preserving source timestamps and session metadata.
+
+Backfill state lives under the configured telemetry state directory. A process
+lock permits only one active worker for each config, agent, and provider tuple.
+A persistent SQLite ledger skips successfully uploaded item IDs on every later
+run, so repeatedly starting the same backfill resumes instead of uploading the
+same turns again. A crash after a remote provider accepts an item but before the
+local ledger commits remains a narrow duplicate window for providers that do
+not enforce the deterministic `paxm_id` themselves.
 
 For Codex, setup writes a shim under the paxm config directory:
 

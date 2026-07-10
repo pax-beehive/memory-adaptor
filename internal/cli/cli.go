@@ -88,6 +88,8 @@ func (r runner) run(args []string) error {
 		return r.runRemember(args[1:])
 	case "history":
 		return r.runHistory(args[1:])
+	case "backfill":
+		return r.runBackfill(args[1:])
 	case "update":
 		return r.runUpdate(args[1:])
 	case "version":
@@ -166,6 +168,16 @@ func (r runner) runSetup(args []string) error {
 		cfg.Providers[name] = provider
 		if !provider.Enabled {
 			removeProviderFromDefaultProfiles(&cfg, name)
+		}
+	}
+	for name, selected := range selectedHooks {
+		if !selected {
+			continue
+		}
+		agent := cfg.Agents[name]
+		if agentPassiveWriteEnabled(agent) && strings.TrimSpace(agent.PassiveWriteStartedAt) == "" {
+			agent.PassiveWriteStartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			cfg.Agents[name] = agent
 		}
 	}
 	if *yes {
@@ -1033,6 +1045,9 @@ func (r runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] recall --query TEXT [--limit N] [--json]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] remember --text TEXT")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] history [--days N] [--json]")
+	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill scan --agent AGENT [--before TIME]")
+	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]")
+	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill status --agent AGENT --provider NAME")
 	fmt.Fprintln(r.stdout, "  paxm update [--check] [--version VERSION]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] config doctor")
 	fmt.Fprintln(r.stdout, "  paxm version")

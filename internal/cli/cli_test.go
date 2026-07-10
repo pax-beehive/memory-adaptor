@@ -215,6 +215,9 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 	if !cfg.Agents["pi"].Enabled {
 		t.Fatalf("pi agent should be enabled: %#v", cfg.Agents["pi"])
 	}
+	if cfg.Agents["pi"].PassiveWriteStartedAt == "" {
+		t.Fatalf("pi integration time should be recorded for historical backfill: %#v", cfg.Agents["pi"])
+	}
 	if cfg.Agents["codex"].Enabled {
 		t.Fatalf("codex agent should be disabled when only pi is selected: %#v", cfg.Agents["codex"])
 	}

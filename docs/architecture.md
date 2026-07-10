@@ -114,6 +114,9 @@ paxm [--config PATH] setup
 paxm [--config PATH] recall --query TEXT [--limit N] [--json]
 paxm [--config PATH] remember --text TEXT
 paxm [--config PATH] history [--days N] [--json]
+paxm [--config PATH] backfill scan --agent AGENT [--before TIME]
+paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]
+paxm [--config PATH] backfill status --agent AGENT --provider NAME
 paxm [--config PATH] config doctor
 ```
 
@@ -135,6 +138,36 @@ does not store prompt text.
 `turn_end` appends a write item and flushes the buffer to the configured write
 profile. The buffer is owned by a short-lived local Unix-socket daemon and lives
 only in process memory. It is intentionally not durable.
+
+## Historical Session Backfill
+
+Backfill readers normalize Codex, Claude Code, and Pi JSONL histories into
+user/assistant turns. They discard system instructions, hidden reasoning, tool
+traffic, sidechains, and attachments. Each normalized turn receives a
+deterministic item ID, original timestamp, session ID, workspace, agent, and
+`backfill:<agent>` source. Oversized turns are split into bounded deterministic
+parts before entering the normal facade/router/provider write path.
+
+The target is an exact enabled provider name rather than a write profile. This
+keeps multiple Mem0 or custom provider instances unambiguous. Extraction rules
+do not change: Mem0 and Zep can infer from the text, SQLite stores it directly,
+and JSON-RPC plugins own their transformation behavior.
+
+Foreground mode owns the worker and reports progress, item throughput, and ETA.
+Background mode launches the same worker detached with stdout/stderr redirected
+to its state log. A per-config, agent, and provider process lock rejects a
+second live worker. A SQLite ledger records successful deterministic item IDs,
+so later foreground or background invocations resume and skip completed items.
+Status is written atomically for concurrent `paxm backfill status` reads.
+
+Normal reruns are idempotent from paxm's perspective. Remote providers without
+an idempotent client ID can still duplicate one item if the process dies after
+the remote write succeeds but before the local ledger transaction commits.
+
+Setup records an immutable first `passive_write_started_at` timestamp when an
+agent first enables passive write. Backfill excludes turns at or after that cutoff. Older configs without a
+recorded timestamp require an explicit `--before` value rather than guessing
+and risking overlap with passive writes.
 
 TTY setup uses terminal checkbox/select controls. Provider instances are
 configured first, then selected agents are configured in stable order. Agent

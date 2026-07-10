@@ -79,9 +79,10 @@ type WriteProfileConfig struct {
 }
 
 type AgentConfig struct {
-	Enabled      bool                       `json:"enabled" yaml:"enabled"`
-	ActiveRecall ActiveRecallConfig         `json:"active_recall,omitempty" yaml:"active_recall,omitempty"`
-	Hooks        map[string]AgentHookConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
+	Enabled               bool                       `json:"enabled" yaml:"enabled"`
+	PassiveWriteStartedAt string                     `json:"passive_write_started_at,omitempty" yaml:"passive_write_started_at,omitempty"`
+	ActiveRecall          ActiveRecallConfig         `json:"active_recall,omitempty" yaml:"active_recall,omitempty"`
+	Hooks                 map[string]AgentHookConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
 }
 
 type ActiveRecallConfig struct {

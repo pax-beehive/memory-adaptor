@@ -38,10 +38,12 @@ type RecallResult struct {
 }
 
 type IngestInput struct {
-	Text     string            `json:"text"`
-	Profile  string            `json:"profile,omitempty"`
-	Source   string            `json:"source,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	ID        string            `json:"id,omitempty"`
+	Text      string            `json:"text"`
+	Profile   string            `json:"profile,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	CreatedAt time.Time         `json:"created_at,omitempty"`
 }
 
 type IngestResult struct {
@@ -111,10 +113,11 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		return IngestResult{}, err
 	}
 	putResult, err := s.router.PutWithPolicy(ctx, memory.MemoryItem{
+		ID:        input.ID,
 		Text:      text,
 		Source:    input.Source,
 		Metadata:  input.Metadata,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: effectiveCreatedAt(input.CreatedAt),
 	}, policy)
 	result := IngestResult{
 		Refs:           putResult.Refs,
@@ -135,10 +138,11 @@ func (s *Service) IngestBatch(ctx context.Context, input IngestBatchInput) (Inge
 			profile = "default"
 		}
 		grouped[profile] = append(grouped[profile], memory.MemoryItem{
+			ID:        item.ID,
 			Text:      text,
 			Source:    item.Source,
 			Metadata:  item.Metadata,
-			CreatedAt: time.Now().UTC(),
+			CreatedAt: effectiveCreatedAt(item.CreatedAt),
 		})
 	}
 	if len(grouped) == 0 {
@@ -161,6 +165,36 @@ func (s *Service) IngestBatch(ctx context.Context, input IngestBatchInput) (Inge
 		}
 	}
 	return result, errors.Join(errs...)
+}
+
+func (s *Service) IngestBatchToProvider(ctx context.Context, provider string, input IngestBatchInput) (IngestResult, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return IngestResult{}, errors.New("provider is required")
+	}
+	items := make([]memory.MemoryItem, 0, len(input.Items))
+	for _, item := range input.Items {
+		text := strings.TrimSpace(item.Text)
+		if text == "" {
+			continue
+		}
+		items = append(items, memory.MemoryItem{
+			ID:        item.ID,
+			Text:      text,
+			Source:    item.Source,
+			Metadata:  item.Metadata,
+			CreatedAt: effectiveCreatedAt(item.CreatedAt),
+		})
+	}
+	putResult, err := s.router.PutBatchWithPolicy(ctx, items, memory.PutPolicy{Providers: []memory.ProviderRoute{{Name: provider, Required: true}}})
+	return IngestResult{Refs: putResult.Refs, ProviderErrors: putResult.ProviderErrors}, err
+}
+
+func effectiveCreatedAt(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Now().UTC()
+	}
+	return value.UTC()
 }
 
 func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, error) {

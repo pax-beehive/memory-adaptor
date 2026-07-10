@@ -509,6 +509,28 @@ preserves hook details in paxm config while setting the selected agent's
 Provider config, memory data, telemetry, active skills, the binary, and `.paxm.bak`
 files are not removed.
 
+When setup first enables an agent, it records:
+
+```yaml
+agents:
+  codex:
+    enabled: true
+    passive_write_started_at: "2026-07-09T18:30:00Z"
+```
+
+`passive_write_started_at` is the default exclusive cutoff for `paxm backfill`. Setup does
+not replace an existing value when an integration is reconfigured. Configs
+created before this field was introduced must pass `--before` to `backfill
+scan` and `backfill run`.
+
+Backfill targets one exact enabled provider instance with `--provider`; it does
+not fan out through a write profile. Foreground mode displays progress, speed,
+and ETA. `--background` starts a silent detached worker. Both modes share a
+per-agent/provider process lock and persistent success ledger, so concurrent or
+repeated commands do not upload already completed items again. Runtime status,
+the lock, the background log, and `backfill.sqlite` are stored below
+`<telemetry.dir>/backfill/`.
+
 ## Telemetry
 
 `telemetry` controls local debug logs and metrics used by `paxm history`.

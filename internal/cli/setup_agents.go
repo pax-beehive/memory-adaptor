@@ -251,6 +251,15 @@ func hookSupportsWrite(hook config.AgentHookConfig) bool {
 	return hook.Write.Enabled || hook.Write.Profile != "" || hook.Write.Template != "" || hook.Write.Mode != "" || hook.Write.Buffer != (config.HookBufferConfig{})
 }
 
+func agentPassiveWriteEnabled(agent config.AgentConfig) bool {
+	for _, eventName := range agentWriteEvents(agent) {
+		if agent.Hooks[eventName].Write.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func recallProfileOptions(cfg config.Config) []setupOption {
 	return namedProfileOptions(cfg.RecallProfiles)
 }

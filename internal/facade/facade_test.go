@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
@@ -12,6 +13,7 @@ import (
 type captureProvider struct {
 	query string
 	hits  []memory.MemoryHit
+	items []memory.MemoryItem
 }
 
 func (p *captureProvider) Name() string {
@@ -26,12 +28,36 @@ func (p *captureProvider) Search(_ context.Context, query memory.SearchQuery) ([
 	return []memory.MemoryHit{{ID: "1", Text: "hit", Score: 1}}, nil
 }
 
-func (p *captureProvider) Put(context.Context, memory.MemoryItem) (memory.MemoryRef, error) {
+func (p *captureProvider) Put(_ context.Context, item memory.MemoryItem) (memory.MemoryRef, error) {
+	p.items = append(p.items, item)
 	return memory.MemoryRef{Provider: "capture", ID: "1"}, nil
 }
 
 func (p *captureProvider) Health(context.Context) error {
 	return nil
+}
+
+func TestIngestBatchToProviderPreservesHistoricalIdentityAndTime(t *testing.T) {
+	provider := &captureProvider{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{Version: 1}, router)
+	createdAt := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+
+	_, err = service.IngestBatchToProvider(context.Background(), "capture", IngestBatchInput{Items: []IngestInput{{
+		ID:        "historical-turn",
+		Text:      "User: hello\nAssistant: hi",
+		Source:    "backfill:codex",
+		CreatedAt: createdAt,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.items) != 1 || provider.items[0].ID != "historical-turn" || !provider.items[0].CreatedAt.Equal(createdAt) {
+		t.Fatalf("historical item was not preserved: %#v", provider.items)
+	}
 }
 
 func TestRunHookUsesExplicitQueryBeforeTemplate(t *testing.T) {
