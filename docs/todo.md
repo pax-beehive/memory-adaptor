@@ -1,9 +1,11 @@
 # paxm TODO
 
 The detailed delivery plan is in [`docs/roadmap.md`](roadmap.md). The v0.1
-Codex plugin slice is scaffolded under `plugins/paxm-memory/`; the remaining
-work here is clean-machine testing, binary/plugin release pairing, and public
-distribution.
+Codex plugin slice is scaffolded under `plugins/paxm-memory/`, and its release
+pairing is public. The first real-task run is recorded in
+[`docs/acceptance/phase-1-v0.1.md`](acceptance/phase-1-v0.1.md). Phase 1 is
+blocked because the plugin currently emits paxm's internal hook JSON instead of
+Codex-native `UserPromptSubmit` output.
 
 ## Codex Plugin Distribution
 
