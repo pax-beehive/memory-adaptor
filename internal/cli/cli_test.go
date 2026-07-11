@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pax-beehive/memory-adaptor/internal/adapters"
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
@@ -598,7 +599,7 @@ func TestHookBufferShutdownFlushesPendingItems(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		flushed, shutdown, err := handleHookBufferConn(context.Background(), service, serverConn, &buffer)
+		flushed, shutdown, err := handleHookBufferConn(context.Background(), service, serverConn, &buffer, func() {})
 		resultCh <- result{flushed: flushed, shutdown: shutdown, err: err}
 	}()
 	if err := writeJSON(clientConn, hookBufferRequest{Action: "shutdown"}); err != nil {
@@ -624,61 +625,52 @@ func TestHookBufferShutdownFlushesPendingItems(t *testing.T) {
 	}
 }
 
-func TestHookBufferFlushSchedulesAsyncCleanup(t *testing.T) {
-	original := scheduleHookCleanup
-	cleanupCalled := make(chan struct{}, 1)
-	scheduleHookCleanup = func(*facade.Service) {
-		cleanupCalled <- struct{}{}
-	}
-	t.Cleanup(func() {
-		scheduleHookCleanup = original
+func TestHookCleanupWorkerSchedulesWithoutBlockingAndDrainsOnClose(t *testing.T) {
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	cleanupFinished := make(chan struct{})
+	worker := newHookCleanupWorker(func(context.Context) {
+		close(cleanupStarted)
+		<-releaseCleanup
+		close(cleanupFinished)
 	})
 
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.DefaultConfig(configPath)
-	provider := cfg.Providers["sqlite"]
-	provider.Path = filepath.Join(t.TempDir(), "memory.sqlite")
-	cfg.Providers["sqlite"] = provider
-	router, err := adapters.DefaultRegistry().BuildRouter(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := facade.New(cfg, router)
-	buffer := []facade.IngestInput{{
-		Text:    "flush cleanup sentinel",
-		Profile: "default",
-		Source:  "test",
-	}}
-	serverConn, clientConn := net.Pipe()
-	t.Cleanup(func() {
-		_ = serverConn.Close()
-		_ = clientConn.Close()
-	})
-	type result struct {
-		flushed  int
-		shutdown bool
-		err      error
-	}
-	resultCh := make(chan result, 1)
+	scheduled := make(chan struct{})
 	go func() {
-		flushed, shutdown, err := handleHookBufferConn(context.Background(), service, serverConn, &buffer)
-		resultCh <- result{flushed: flushed, shutdown: shutdown, err: err}
+		worker.Schedule()
+		close(scheduled)
 	}()
-	if err := writeJSON(clientConn, hookBufferRequest{Action: "flush"}); err != nil {
-		t.Fatal(err)
-	}
-	var response hookBufferResponse
-	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	got := <-resultCh
-	if got.err != nil || got.shutdown || got.flushed != 1 || !response.OK || response.Flushed != 1 {
-		t.Fatalf("unexpected flush result: result=%#v response=%#v", got, response)
+	select {
+	case <-scheduled:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup scheduling blocked the hook path")
 	}
 	select {
-	case <-cleanupCalled:
+	case <-cleanupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled cleanup did not start")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		worker.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("worker closed before scheduled cleanup completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseCleanup)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not close after cleanup completed")
+	}
+	select {
+	case <-cleanupFinished:
 	default:
-		t.Fatal("flush did not schedule async cleanup")
+		t.Fatal("worker close did not drain scheduled cleanup")
 	}
 }
 

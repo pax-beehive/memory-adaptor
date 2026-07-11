@@ -65,6 +65,10 @@ A recall profile is the policy boundary for reads. It chooses:
 `min_relevance` filters provider-normalized hits before cross-provider ranking.
 `min_score` filters the final merged score after route weight and ranking boosts.
 Provider-route thresholds override the profile default for that provider only.
+The router asks each provider for a bounded candidate pool larger than the final
+limit, then applies thresholds and cross-provider deduplication. Duplicate text
+keeps the highest-scoring hit with deterministic tie-breaking, so concurrent
+provider completion order cannot change the winner.
 
 Passive hook recall should not use one policy for every turn. The default
 `passive_initial` profile is used only for the first `user_input` observed for a
@@ -102,7 +106,9 @@ Enabled providers can be used by multiple read and write profiles.
 The built-in `stm` profile writes short-term working memory with a 24 hour
 expiry. The built-in `ltm` profile writes durable long-term memory. Passive hook
 writes default to `ltm`; active agents should use `stm` for task-local working
-state and `ltm` only for durable facts.
+state and `ltm` only for durable facts. Configuration rejects unknown tier names,
+requires every `stm` profile to have a positive expiry, and rejects expiry on
+`ltm` profiles.
 
 ## Agent Entries
 
@@ -227,11 +233,13 @@ Mem0, and JSON-RPC receive the same fields on `MemoryItem`; for remote results,
 the core router also understands `paxm_tier` and `paxm_expires_at` metadata.
 
 After a successful hook-buffer flush, paxm schedules a best-effort expired-memory
-cleanup in the background. Cleanup is provider opt-in: SQLite deletes a bounded
-batch of rows whose `expires_at` has passed, while providers without cleanup
-support are skipped. Recall correctness does not depend on cleanup because both
-SQLite and the core router filter expired hits before returning them. The cleanup
-path is storage hygiene only, and it does not block the hook response or run
+cleanup on a single daemon-owned worker. Cleanup is provider opt-in: SQLite
+deletes a bounded batch of rows whose `expires_at` has passed, while providers
+without cleanup support are skipped. Scheduling does not block the hook response,
+and duplicate pending schedules are coalesced. Idle and shutdown paths drain
+already scheduled cleanup before the daemon exits. Recall correctness does not
+depend on cleanup because both SQLite and the core router filter expired hits
+before returning them. The cleanup path is storage hygiene only and does not run
 `VACUUM`.
 
 Pi is integrated through Pi's extension system:
