@@ -194,28 +194,51 @@ quality or challenge-set work is required for the paxm roadmap.
 
 ## Phase 3: Native macOS Application
 
-After the evaluation harness establishes the important quality signals, build a
-single native macOS application. Prefer a native SwiftUI experience suitable
-for normal desktop use and an optional menu bar entry.
+Status: product and interaction design in progress in a separate Claude design
+track. Implementation should begin only after that design is reviewed against
+the runtime boundaries below.
+
+Build a single native SwiftUI application suitable for normal desktop use and
+an optional menu bar entry.
 
 The application should be a client of the paxm core. Provider calls, routing,
 ranking, admission, telemetry, and config validation remain in Go. Any new
 machine-facing interface required by the application should be narrow and
 shared with other paxm entrypoints where practical.
 
-### Initial Experience
+### 3A: Read-only Observer
 
-- Guided setup for agent integrations and providers.
 - Provider and hook health with actionable diagnostics.
-- Manual memory write and recall.
+- Daemon and durable queue status, including pending, retry, and failed writes.
 - A timeline of memory writes, recall attempts, inserted results, and failures.
-- Search results showing provider, tier, score, profile, and relevant metadata.
-- Recall explanations showing why an item was inserted or filtered, including
-  thresholds and policy decisions.
-- Safe configuration through opinionated presets with an advanced view for the
-  existing profile model.
+- Provider latency, queue delay, routing outcome, and error details.
 - Clear disclosure of where memory is stored and which providers receive each
   write.
+
+### 3B: Diagnostics and Safe Actions
+
+- Provider health checks and hook smoke tests.
+- Flush or retry durable pending writes without bypassing queue policy.
+- Manual remember and active recall through the Go runtime.
+- Open logs/config locations and export a bounded diagnostic report.
+
+### 3C: Controlled Configuration
+
+- Enable or disable providers and choose required versus best-effort routing.
+- Configure agent passive write/recall and provider concurrency.
+- Offer intent presets only when they map cleanly to existing Go policy.
+- Validate every proposed change and run a smoke test after applying it.
+
+Swift must not edit YAML directly. Add a narrow typed Go interface for config
+reads, validation, and updates. Any presets, explanations, or migrations needed
+by the application belong in this slice rather than a separate facade phase.
+
+### 3D: Distribution
+
+- Signing and notarization.
+- First-run binary installation and hook-trust guidance.
+- Application and paxm binary update behavior, disable, and rollback.
+- Optional menu bar status after the main application is reliable.
 
 ### Boundaries
 
@@ -245,6 +268,25 @@ integration when passive lifecycle hooks or distribution materially improve the
 experience. Each new agent integration must include a real end-to-end test that
 proves write and recall through the agent's actual runtime.
 
+Claude Code plugin status: local spike completed. The repo plugin packages the
+paxm skills, all five existing Claude lifecycle hooks, and `paxm mcp serve`.
+`paxm setup --integration claude-plugin` migrates ownership and removes only
+legacy paxm-managed Claude hooks. Local real-runtime acceptance proved passive
+write, fresh-session passive recall, MCP active recall, marketplace install,
+disable, and re-enable behavior. Public release/version pairing remains before
+the plugin is treated as a supported distribution channel.
+
+OpenCode is the first integration candidate to investigate:
+
+- active recall already works through OpenCode's local MCP server support, so
+  document that path before adding agent-specific code;
+- OpenCode plugins expose message, tool, and session lifecycle events including
+  `session.idle`, which may support passive write without transcript scraping;
+- run a small real-runtime spike to verify event payload completeness, session
+  identity, workspace identity, ordering, and fail-open behavior;
+- ship a dedicated plugin only if it materially improves passive write or
+  passive recall over MCP alone, and require an audited end-to-end test.
+
 ### Provider Support
 
 Prefer strengthening the JSON-RPC provider boundary over accumulating adapters
@@ -256,25 +298,11 @@ in core:
 - add a built-in provider only when it serves a common use case that the plugin
   boundary cannot serve cleanly.
 
-## Phase 5: Facade Evolution Driven by Evidence
-
-Do not add facade controls merely because they are configurable. Use evaluation
-results and real user failures to decide what belongs in the public model.
-
-Near-term improvements should favor:
-
-- intent-based presets such as local/private, balanced, and remote memory;
-- explainability for existing thresholds, weights, tiers, and insertion rules;
-- safe comparison of proposed configuration changes against the evaluation
-  suite;
-- migrations that keep existing configs valid.
-
-Additional ranking algorithms, semantic lifecycle behavior, conflict
-resolution, STM promotion, or LTM supersession should be separate decisions with
-their own scenarios and measurable acceptance criteria.
-
 ## Current Priority Order
 
-1. Native macOS application using the paxm core.
-2. Agent and provider integrations selected from demonstrated demand.
-3. Additional facade behavior justified by real adapter failures.
+1. Review the in-progress macOS design, then implement Phase 3A.
+2. Continue through 3B-3D without duplicating the Go runtime in Swift.
+3. Release and document the validated Claude Code plugin.
+4. Run an OpenCode integration spike; ship only if MCP plus plugin lifecycle
+   events provide a clear passive-memory improvement.
+5. Expand other agents or providers only from demonstrated demand.

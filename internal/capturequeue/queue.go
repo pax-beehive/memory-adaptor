@@ -867,16 +867,20 @@ func sameSequence(stored sql.NullInt64, incoming *int64) bool {
 }
 
 func (q *Queue) verifyEpisode(ctx context.Context, episode Episode) error {
-	rows, err := q.db.QueryContext(ctx, `SELECT payload_hash FROM capture_events WHERE episode_id = ? ORDER BY sequence`, episode.ID)
+	rows, err := q.db.QueryContext(ctx, `SELECT payload_json, payload_hash FROM capture_events WHERE episode_id = ? ORDER BY sequence`, episode.ID)
 	if err != nil {
 		return err
 	}
 	var hashes []string
 	for rows.Next() {
-		var hash string
-		if err := rows.Scan(&hash); err != nil {
+		var payload, hash string
+		if err := rows.Scan(&payload, &hash); err != nil {
 			rows.Close()
 			return err
+		}
+		if checksum([]byte(payload)) != hash {
+			rows.Close()
+			return fmt.Errorf("capture episode %s event %d checksum mismatch", episode.ID, len(hashes)+1)
 		}
 		hashes = append(hashes, hash)
 	}
@@ -885,15 +889,6 @@ func (q *Queue) verifyEpisode(ctx context.Context, episode Episode) error {
 	}
 	if len(hashes) != len(episode.Events) {
 		return fmt.Errorf("capture episode %s event count mismatch", episode.ID)
-	}
-	for index, item := range episode.Events {
-		payload, err := marshalItem(item)
-		if err != nil {
-			return err
-		}
-		if checksum(payload) != hashes[index] {
-			return fmt.Errorf("capture episode %s event %d checksum mismatch", episode.ID, index+1)
-		}
 	}
 	if checksum([]byte(strings.Join(hashes, "\n"))) != episode.Checksum {
 		return fmt.Errorf("capture episode %s checksum mismatch", episode.ID)

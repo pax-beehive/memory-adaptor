@@ -492,6 +492,35 @@ func TestCorruptedEpisodeFailsChecksumBeforeDelivery(t *testing.T) {
 	}
 }
 
+func TestAdmissionTextSurvivesEpisodeChecksumVerification(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "capture.sqlite")
+	var delivered capturequeue.Episode
+	queue, err := capturequeue.Open(path, capturequeue.Options{
+		Providers: func(string) []string { return []string{"sqlite"} },
+		Deliver: func(_ context.Context, _ string, episode capturequeue.Episode) (string, error) {
+			delivered = episode
+			return "ref", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	if _, err := queue.Append(ctx, capturequeue.Event{SessionKey: "session", Terminal: true, Item: facade.IngestInput{
+		Text: "visible text", AdmissionText: "private admission text", Profile: "ltm",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := queue.RunOnce(ctx)
+	if err != nil || result.Delivered != 1 || result.Dead != 0 {
+		t.Fatalf("delivery result=%#v err=%v", result, err)
+	}
+	if len(delivered.Events) != 1 || delivered.Events[0].Text != "visible text" {
+		t.Fatalf("delivered episode=%#v", delivered)
+	}
+}
+
 func TestMalformedRouteSnapshotIsQuarantinedWithoutBlockingHealthyDelivery(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "capture.sqlite")

@@ -1,0 +1,13 @@
+{
+  "name": "pax-memory",
+  "description": "Official paxm integrations for Claude Code",
+  "owner": {"name": "PAX"},
+  "plugins": [
+    {
+      "name": "paxm-claude",
+      "description": "Passive and active paxm memory for Claude Code",
+      "source": "./plugins/paxm-claude",
+      "category": "productivity"
+    }
+  ]
+}
