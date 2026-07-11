@@ -8,6 +8,14 @@ import (
 	"testing"
 )
 
+func TestNormalizeCaptureQueueMergesMissingConcurrencyDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := Normalize(Config{CaptureQueue: CaptureQueueConfig{ProviderConcurrency: map[string]int{"mem0": 8}}})
+	if cfg.CaptureQueue.ProviderConcurrency["mem0"] != 8 || cfg.CaptureQueue.ProviderConcurrency["sqlite"] != 1 || cfg.CaptureQueue.ProviderConcurrency["default"] != 4 {
+		t.Fatalf("capture queue concurrency defaults were not merged: %#v", cfg.CaptureQueue.ProviderConcurrency)
+	}
+}
+
 func TestSaveWritesYAMLByDefault(t *testing.T) {
 	t.Parallel()
 

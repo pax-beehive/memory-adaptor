@@ -168,19 +168,31 @@ func (s *Service) IngestBatchToProvider(ctx context.Context, provider string, in
 	if provider == "" {
 		return IngestResult{}, errors.New("provider is required")
 	}
-	items := make([]memory.MemoryItem, 0, len(input.Items))
+	grouped := make(map[string][]memory.MemoryItem)
 	for _, item := range input.Items {
-		memoryItem, _, ok := memoryItemFromIngestInput(item)
+		memoryItem, profile, ok := memoryItemFromIngestInput(item)
 		if !ok {
 			continue
 		}
-		items = append(items, memoryItem)
+		grouped[profile] = append(grouped[profile], memoryItem)
 	}
-	putResult, err := s.router.PutBatchWithPolicy(ctx, items, memory.PutPolicy{
-		Providers: []memory.ProviderRoute{{Name: provider, Required: true}},
-		Tier:      memory.TierLTM,
-	})
-	return IngestResult{Refs: putResult.Refs, ProviderErrors: putResult.ProviderErrors}, err
+	var result IngestResult
+	var errs []error
+	for profile, items := range grouped {
+		policy, err := s.putPolicy(profile)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		policy.Providers = []memory.ProviderRoute{{Name: provider, Required: true}}
+		putResult, err := s.router.PutBatchWithPolicy(ctx, items, policy)
+		result.Refs = append(result.Refs, putResult.Refs...)
+		result.ProviderErrors = append(result.ProviderErrors, putResult.ProviderErrors...)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return result, errors.Join(errs...)
 }
 
 func (s *Service) CleanupExpired(ctx context.Context, limit int) (memory.CleanupExpiredResult, error) {
@@ -313,13 +325,24 @@ func (s *Service) HookWriteItem(event HookEvent) (IngestInput, bool, error) {
 	if event.Event == "user_input" {
 		admissionText = event.Prompt
 	}
-	return IngestInput{
+	input := IngestInput{
 		Text:          text,
 		AdmissionText: admissionText,
 		Profile:       eventCfg.Write.Profile,
 		Source:        "hook:" + event.Target + ":" + event.Event,
 		Metadata:      metadata,
-	}, true, nil
+	}
+	policy, err := s.putPolicy(input.Profile)
+	if err != nil {
+		return IngestInput{}, false, err
+	}
+	input.Tier = policy.Tier
+	input.CreatedAt = time.Now().UTC()
+	if policy.ExpiresAfter > 0 {
+		expiresAt := input.CreatedAt.Add(policy.ExpiresAfter)
+		input.ExpiresAt = &expiresAt
+	}
+	return input, true, nil
 }
 
 func (s *Service) HookBufferConfig(event HookEvent) config.HookBufferConfig {

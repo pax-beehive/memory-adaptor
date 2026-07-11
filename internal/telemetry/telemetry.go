@@ -24,30 +24,36 @@ import (
 const metricsVersion = 1
 
 type Event struct {
-	Time                 time.Time             `json:"time"`
-	Kind                 string                `json:"kind"`
-	Source               string                `json:"source,omitempty"`
-	Command              string                `json:"command,omitempty"`
-	Target               string                `json:"target,omitempty"`
-	HookEvent            string                `json:"hook_event,omitempty"`
-	Profile              string                `json:"profile,omitempty"`
-	Success              bool                  `json:"success"`
-	Skipped              bool                  `json:"skipped,omitempty"`
-	DurationMS           int64                 `json:"duration_ms,omitempty"`
-	QueryHash            string                `json:"query_hash,omitempty"`
-	QueryLength          int                   `json:"query_length,omitempty"`
-	QueryPreview         string                `json:"query_preview,omitempty"`
-	HitCount             int                   `json:"hit_count,omitempty"`
-	InsertedCount        int                   `json:"inserted_count,omitempty"`
-	ItemCount            int                   `json:"item_count,omitempty"`
-	RefCount             int                   `json:"ref_count,omitempty"`
-	Flushed              int                   `json:"flushed,omitempty"`
-	ProviderRecalls      map[string]int        `json:"provider_recalls,omitempty"`
-	ProviderWrites       map[string]int        `json:"provider_writes,omitempty"`
-	ProviderHits         map[string]int        `json:"provider_hits,omitempty"`
-	ProviderRefs         map[string]int        `json:"provider_refs,omitempty"`
-	ProviderErrorDetails []ProviderErrorDetail `json:"provider_errors,omitempty"`
-	Error                string                `json:"error,omitempty"`
+	Time                       time.Time             `json:"time"`
+	Kind                       string                `json:"kind"`
+	Source                     string                `json:"source,omitempty"`
+	Command                    string                `json:"command,omitempty"`
+	Target                     string                `json:"target,omitempty"`
+	HookEvent                  string                `json:"hook_event,omitempty"`
+	Profile                    string                `json:"profile,omitempty"`
+	Success                    bool                  `json:"success"`
+	Skipped                    bool                  `json:"skipped,omitempty"`
+	DurationMS                 int64                 `json:"duration_ms,omitempty"`
+	ProviderDurationMS         int64                 `json:"provider_duration_ms,omitempty"`
+	PassiveWriteLatencyTotalMS int64                 `json:"passive_write_latency_total_ms,omitempty"`
+	PassiveWriteSamples        int                   `json:"passive_write_samples,omitempty"`
+	QueryHash                  string                `json:"query_hash,omitempty"`
+	QueryLength                int                   `json:"query_length,omitempty"`
+	QueryPreview               string                `json:"query_preview,omitempty"`
+	HitCount                   int                   `json:"hit_count,omitempty"`
+	InsertedCount              int                   `json:"inserted_count,omitempty"`
+	ItemCount                  int                   `json:"item_count,omitempty"`
+	RefCount                   int                   `json:"ref_count,omitempty"`
+	Flushed                    int                   `json:"flushed,omitempty"`
+	ProviderRecalls            map[string]int        `json:"provider_recalls,omitempty"`
+	ProviderWrites             map[string]int        `json:"provider_writes,omitempty"`
+	ProviderHits               map[string]int        `json:"provider_hits,omitempty"`
+	ProviderRefs               map[string]int        `json:"provider_refs,omitempty"`
+	ProviderErrorDetails       []ProviderErrorDetail `json:"provider_errors,omitempty"`
+	Error                      string                `json:"error,omitempty"`
+	EpisodeID                  string                `json:"episode_id,omitempty"`
+	SessionKey                 string                `json:"session_key,omitempty"`
+	Provider                   string                `json:"provider,omitempty"`
 }
 
 type ProviderErrorDetail struct {
@@ -77,19 +83,23 @@ type DailyMetric struct {
 }
 
 type Counter struct {
-	Events         int   `json:"events"`
-	Successes      int   `json:"successes,omitempty"`
-	Errors         int   `json:"errors,omitempty"`
-	Skipped        int   `json:"skipped,omitempty"`
-	Recalls        int   `json:"recalls,omitempty"`
-	Hits           int   `json:"hits,omitempty"`
-	Inserted       int   `json:"inserted,omitempty"`
-	Writes         int   `json:"writes,omitempty"`
-	Items          int   `json:"items,omitempty"`
-	Refs           int   `json:"refs,omitempty"`
-	Flushes        int   `json:"flushes,omitempty"`
-	ProviderErrors int   `json:"provider_errors,omitempty"`
-	DurationMS     int64 `json:"duration_ms,omitempty"`
+	Events                     int   `json:"events"`
+	Successes                  int   `json:"successes,omitempty"`
+	Errors                     int   `json:"errors,omitempty"`
+	Skipped                    int   `json:"skipped,omitempty"`
+	Recalls                    int   `json:"recalls,omitempty"`
+	Hits                       int   `json:"hits,omitempty"`
+	Inserted                   int   `json:"inserted,omitempty"`
+	Writes                     int   `json:"writes,omitempty"`
+	Items                      int   `json:"items,omitempty"`
+	Refs                       int   `json:"refs,omitempty"`
+	Flushes                    int   `json:"flushes,omitempty"`
+	ProviderErrors             int   `json:"provider_errors,omitempty"`
+	DurationMS                 int64 `json:"duration_ms,omitempty"`
+	ProviderWriteSamples       int   `json:"provider_write_samples,omitempty"`
+	ProviderWriteDurationMS    int64 `json:"provider_write_duration_ms,omitempty"`
+	PassiveWriteLatencyTotalMS int64 `json:"passive_write_latency_total_ms,omitempty"`
+	PassiveWriteSamples        int   `json:"passive_write_samples,omitempty"`
 }
 
 type HistorySummary struct {
@@ -610,6 +620,10 @@ func (c *Counter) Add(other Counter) {
 	c.Flushes += other.Flushes
 	c.ProviderErrors += other.ProviderErrors
 	c.DurationMS += other.DurationMS
+	c.ProviderWriteSamples += other.ProviderWriteSamples
+	c.ProviderWriteDurationMS += other.ProviderWriteDurationMS
+	c.PassiveWriteLatencyTotalMS += other.PassiveWriteLatencyTotalMS
+	c.PassiveWriteSamples += other.PassiveWriteSamples
 }
 
 func QueryFields(query string, capturePreview bool, previewChars int) (hash string, length int, preview string) {
@@ -846,6 +860,14 @@ func counterForEvent(event Event) Counter {
 		if !event.Skipped {
 			counter.Writes = 1
 		}
+	case "hook_delivery":
+		if event.Success && !event.Skipped {
+			counter.Writes = 1
+			counter.ProviderWriteSamples = 1
+			counter.ProviderWriteDurationMS = event.ProviderDurationMS
+			counter.PassiveWriteLatencyTotalMS = event.PassiveWriteLatencyTotalMS
+			counter.PassiveWriteSamples = event.PassiveWriteSamples
+		}
 	}
 	if len(event.ProviderErrorDetails) > 0 && counter.Errors == 0 {
 		counter.Errors = len(event.ProviderErrorDetails)
@@ -880,6 +902,14 @@ func providerCountersForEvent(event Event) map[string]Counter {
 		counter.ProviderErrors++
 		counter.Errors++
 		counters[providerErr.Provider] = counter
+	}
+	if event.Kind == "hook_delivery" && event.Success && !event.Skipped && strings.TrimSpace(event.Provider) != "" {
+		counter := counters[event.Provider]
+		counter.ProviderWriteSamples++
+		counter.ProviderWriteDurationMS += event.ProviderDurationMS
+		counter.PassiveWriteLatencyTotalMS += event.PassiveWriteLatencyTotalMS
+		counter.PassiveWriteSamples += event.PassiveWriteSamples
+		counters[event.Provider] = counter
 	}
 	for provider, counter := range counters {
 		if provider == "" {

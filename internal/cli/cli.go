@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
+	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	paxeval "github.com/pax-beehive/memory-adaptor/internal/eval"
 	"github.com/pax-beehive/memory-adaptor/internal/facade"
@@ -35,19 +38,22 @@ const (
 )
 
 type ensureZepUserFunc func(context.Context, config.ProviderConfig) (zepadapter.EnsureUserResult, error)
+type shutdownHookDaemonFunc func(string) error
 
 type Dependencies struct {
-	Version       string
-	EnsureZepUser ensureZepUserFunc
+	Version            string
+	EnsureZepUser      ensureZepUserFunc
+	ShutdownHookDaemon shutdownHookDaemonFunc
 }
 
 type runner struct {
-	stdin         io.Reader
-	stdout        io.Writer
-	stderr        io.Writer
-	configPath    string
-	version       string
-	ensureZepUser ensureZepUserFunc
+	stdin              io.Reader
+	stdout             io.Writer
+	stderr             io.Writer
+	configPath         string
+	version            string
+	ensureZepUser      ensureZepUserFunc
+	shutdownHookDaemon shutdownHookDaemonFunc
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -71,12 +77,13 @@ func MainWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 	deps = deps.withDefaults()
 	r := runner{
-		stdin:         stdin,
-		stdout:        stdout,
-		stderr:        stderr,
-		configPath:    configPath,
-		version:       deps.Version,
-		ensureZepUser: deps.EnsureZepUser,
+		stdin:              stdin,
+		stdout:             stdout,
+		stderr:             stderr,
+		configPath:         configPath,
+		version:            deps.Version,
+		ensureZepUser:      deps.EnsureZepUser,
+		shutdownHookDaemon: deps.ShutdownHookDaemon,
 	}
 	if len(args) == 0 {
 		r.printHelp()
@@ -104,6 +111,11 @@ func (deps Dependencies) withDefaults() Dependencies {
 	if deps.EnsureZepUser == nil {
 		deps.EnsureZepUser = zepadapter.EnsureUser
 	}
+	if deps.ShutdownHookDaemon == nil {
+		deps.ShutdownHookDaemon = func(configPath string) error {
+			return flushExistingHookBuffer(configPath, true)
+		}
+	}
 	return deps
 }
 
@@ -119,6 +131,15 @@ func (r runner) ensureZepUserFunc() ensureZepUserFunc {
 		return r.ensureZepUser
 	}
 	return zepadapter.EnsureUser
+}
+
+func (r runner) shutdownHookDaemonFunc() shutdownHookDaemonFunc {
+	if r.shutdownHookDaemon != nil {
+		return r.shutdownHookDaemon
+	}
+	return func(configPath string) error {
+		return flushExistingHookBuffer(configPath, true)
+	}
 }
 
 func (r runner) run(args []string) error {
@@ -754,10 +775,11 @@ func writeCodexUserPromptHookOutput(w io.Writer, result facade.HookResult) error
 }
 
 type hookBufferRequest struct {
-	Action string          `json:"action,omitempty"`
-	Target string          `json:"target"`
-	Event  string          `json:"event"`
-	Raw    json.RawMessage `json:"raw"`
+	Action  string          `json:"action,omitempty"`
+	EventID string          `json:"event_id,omitempty"`
+	Target  string          `json:"target"`
+	Event   string          `json:"event"`
+	Raw     json.RawMessage `json:"raw"`
 }
 
 type hookBufferResponse struct {
@@ -860,10 +882,92 @@ func (r runner) runHookDaemon(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_, service, err := r.loadRuntime()
+	cfg, service, err := r.loadRuntime()
 	if err != nil {
 		return err
 	}
+	releaseLock, err := acquireHookDaemonLock(r.configFile())
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+	queuePath := hookQueuePath(r.configFile())
+	if strings.TrimSpace(cfg.CaptureQueue.Path) != "" {
+		queuePath = cfg.CaptureQueue.Path
+	}
+	maxEpisodeAge, _ := time.ParseDuration(cfg.CaptureQueue.MaxEpisodeAge)
+	retryMin, _ := time.ParseDuration(cfg.CaptureQueue.RetryMin)
+	queue, err := capturequeue.Open(queuePath, capturequeue.Options{
+		MaxEpisodeAge: maxEpisodeAge,
+		RetryMin:      retryMin,
+		MaxAttempts:   cfg.CaptureQueue.MaxAttempts,
+		Providers: func(profile string) []string {
+			writeProfile, ok := cfg.WriteProfiles[paxruntime.EffectiveWriteProfile(profile)]
+			if !ok {
+				return nil
+			}
+			providers := make([]string, 0, len(writeProfile.Providers))
+			for _, route := range writeProfile.Providers {
+				providers = append(providers, route.Name)
+			}
+			return providers
+		},
+		ProviderConcurrency: func(provider string) int {
+			if concurrency := cfg.CaptureQueue.ProviderConcurrency[provider]; concurrency > 0 {
+				return concurrency
+			}
+			return cfg.CaptureQueue.ProviderConcurrency["default"]
+		},
+		Deliver: func(ctx context.Context, provider string, episode capturequeue.Episode) (string, error) {
+			items := episode.IngestInputs()
+			result, err := service.IngestBatchToProvider(ctx, provider, facade.IngestBatchInput{Items: items})
+			if len(result.Refs) == 0 {
+				if err != nil {
+					return "", err
+				}
+				return "", fmt.Errorf("provider %s returned no memory reference", provider)
+			}
+			return result.Refs[0].ID, err
+		},
+		OnDelivery: func(outcome capturequeue.DeliveryOutcome) {
+			hookEvent := "delivery"
+			if outcome.Dead {
+				hookEvent = "delivery_dead"
+			}
+			event := telemetry.Event{
+				Time:                       time.Now().UTC(),
+				Kind:                       "hook_delivery",
+				Source:                     "capture_queue",
+				Command:                    "hook",
+				HookEvent:                  hookEvent,
+				Success:                    outcome.Err == nil,
+				DurationMS:                 outcome.Duration.Milliseconds(),
+				ProviderDurationMS:         outcome.Duration.Milliseconds(),
+				PassiveWriteLatencyTotalMS: outcome.PassiveWriteLatencyTotal.Milliseconds(),
+				PassiveWriteSamples:        outcome.PassiveWriteSamples,
+				ItemCount:                  1,
+				EpisodeID:                  outcome.EpisodeID,
+				SessionKey:                 outcome.SessionKey,
+				Provider:                   outcome.Provider,
+				Error:                      paxruntime.TelemetryError(outcome.Err),
+			}
+			if outcome.Err != nil {
+				event.ProviderErrorDetails = []telemetry.ProviderErrorDetail{{Provider: outcome.Provider, Op: "put"}}
+			}
+			if outcome.Ref != "" {
+				event.RefCount = 1
+				event.ProviderWrites = map[string]int{outcome.Provider: 1}
+				event.ProviderRefs = map[string]int{outcome.Provider: 1}
+			}
+			r.recordTelemetry(cfg, event)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
+	worker := newCaptureDeliveryWorker(queue)
+	defer worker.Close()
 	cleanupWorker := newHookCleanupWorker(func(ctx context.Context) {
 		_, _ = service.CleanupExpired(ctx, 500)
 	})
@@ -881,7 +985,6 @@ func (r runner) runHookDaemon(args []string) error {
 		_ = os.Remove(*socket)
 	}()
 
-	var buffer []facade.IngestInput
 	deadline := time.NewTimer(*idleTimeout)
 	defer deadline.Stop()
 	for {
@@ -896,17 +999,14 @@ func (r runner) runHookDaemon(args []string) error {
 		}()
 		select {
 		case <-deadline.C:
-			if len(buffer) > 0 {
-				if _, err := service.IngestBatch(context.Background(), facade.IngestBatchInput{Items: buffer}); err == nil {
-					cleanupWorker.Schedule()
-				}
-			}
+			_, _ = queue.SealAll(context.Background())
+			_, _ = queue.RunOnce(context.Background())
 			return nil
 		case result := <-accepted:
 			if result.err != nil {
 				return result.err
 			}
-			flushed, shutdown, err := handleHookBufferConn(context.Background(), service, result.conn, &buffer, cleanupWorker.Schedule)
+			flushed, shutdown, err := handleCaptureQueueConn(context.Background(), service, queue, result.conn, worker.Notify, cleanupWorker.Schedule)
 			if err != nil {
 				fmt.Fprintf(r.stderr, "paxm hook buffer error: %s\n", err)
 			}
@@ -925,7 +1025,7 @@ func (r runner) runHookDaemon(args []string) error {
 	}
 }
 
-func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net.Conn, buffer *[]facade.IngestInput, scheduleCleanup func()) (int, bool, error) {
+func handleCaptureQueueConn(ctx context.Context, service *facade.Service, queue *capturequeue.Queue, conn net.Conn, notifyDelivery, scheduleCleanup func()) (int, bool, error) {
 	defer conn.Close()
 	var request hookBufferRequest
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
@@ -933,101 +1033,99 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 		return 0, false, err
 	}
 	if request.Action == "flush" || request.Action == "shutdown" {
-		flushed := len(*buffer)
-		if flushed > 0 {
-			result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: *buffer})
-			if err != nil {
-				_ = writeJSON(conn, hookBufferResponse{
-					OK:             false,
-					Error:          err.Error(),
-					ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-					ProviderErrors: result.ProviderErrors,
-				})
-				return 0, false, err
-			}
-			*buffer = nil
-			scheduleCleanup()
-			_ = writeJSON(conn, hookBufferResponse{
-				OK:             true,
-				Flushed:        flushed,
-				ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-				ProviderErrors: result.ProviderErrors,
-			})
-		} else {
-			_ = writeJSON(conn, hookBufferResponse{OK: true})
+		sealed, err := queue.SealAll(ctx)
+		if err == nil && request.Action == "flush" {
+			_, err = queue.RunOnce(ctx)
 		}
-		return flushed, request.Action == "shutdown", nil
+		if err != nil {
+			_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
+			return 0, false, err
+		}
+		scheduleCleanup()
+		_ = writeJSON(conn, hookBufferResponse{OK: true, Flushed: sealed})
+		return sealed, request.Action == "shutdown", nil
 	}
 	event, err := decodeHookEvent(request.Raw, request.Target, request.Event)
 	if err != nil {
 		_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
 		return 0, false, err
 	}
+	if request.EventID != "" {
+		if event.Metadata == nil {
+			event.Metadata = make(map[string]string)
+		}
+		event.Metadata["event_id"] = request.EventID
+	}
 	item, ok, err := service.HookWriteItem(event)
+	if err != nil || !ok {
+		response := hookBufferResponse{OK: err == nil}
+		if err != nil {
+			response.Error = err.Error()
+		}
+		_ = writeJSON(conn, response)
+		return 0, false, err
+	}
+	sessionKey := captureSessionKey(event)
+	bufferCfg := service.HookBufferConfig(event)
+	receipt, err := queue.Append(ctx, capturequeue.Event{
+		ID:         strings.TrimSpace(event.Metadata["event_id"]),
+		SessionKey: sessionKey,
+		Terminal:   bufferCfg.Flush,
+		Sequence:   hookSequence(event.Metadata, "event_sequence", "sequence"),
+		Final:      hookSequence(event.Metadata, "final_sequence"),
+		Item:       item,
+	})
 	if err != nil {
 		_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
 		return 0, false, err
 	}
-	if !ok {
-		_ = writeJSON(conn, hookBufferResponse{OK: true})
-		return 0, false, nil
+	notifyDelivery()
+	flushed := 0
+	if bufferCfg.Flush {
+		flushed = 1
 	}
-	bufferCfg := service.HookBufferConfig(event)
-	if !bufferCfg.Enabled {
-		result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: []facade.IngestInput{item}})
-		if err != nil {
-			_ = writeJSON(conn, hookBufferResponse{
-				OK:             false,
-				Error:          err.Error(),
-				ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-				ProviderErrors: result.ProviderErrors,
-			})
-			return 0, false, err
-		}
-		_ = writeJSON(conn, hookBufferResponse{
-			OK:             true,
-			Buffered:       true,
-			Flushed:        1,
-			ProviderWrites: paxruntime.WriteProviderRoutes(service.Config(), item.Profile),
-			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-			ProviderErrors: result.ProviderErrors,
-		})
-		scheduleCleanup()
-		return 1, false, nil
-	}
-	*buffer = append(*buffer, item)
-	shouldFlush := bufferCfg.Flush || (bufferCfg.FlushCount > 0 && len(*buffer) >= bufferCfg.FlushCount)
-	if !shouldFlush {
-		_ = writeJSON(conn, hookBufferResponse{OK: true, Buffered: true})
-		return 0, false, nil
-	}
-	flushed := len(*buffer)
-	providerWrites := paxruntime.WriteProviderRoutesForItems(service.Config(), *buffer)
-	result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: *buffer})
-	if err != nil {
-		_ = writeJSON(conn, hookBufferResponse{
-			OK:             false,
-			Error:          err.Error(),
-			ProviderWrites: providerWrites,
-			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-			ProviderErrors: result.ProviderErrors,
-		})
-		return 0, false, err
-	}
-	*buffer = nil
-	scheduleCleanup()
 	_ = writeJSON(conn, hookBufferResponse{
-		OK:             true,
-		Buffered:       true,
-		Flushed:        flushed,
-		ProviderWrites: providerWrites,
-		ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-		ProviderErrors: result.ProviderErrors,
+		OK:       true,
+		Buffered: true,
+		Flushed:  flushed,
 	})
+	_ = receipt
 	return flushed, false, nil
 }
 
+func captureSessionKey(event facade.HookEvent) string {
+	target := firstNonEmpty(strings.TrimSpace(event.Target), "codex")
+	workspace := firstNonEmpty(strings.TrimSpace(event.Workspace), strings.TrimSpace(event.Metadata["cwd"]), "unknown")
+	if sessionID := strings.TrimSpace(event.Metadata["session_id"]); sessionID != "" {
+		return target + "/workspace/" + workspace + "/session/" + sessionID
+	}
+	if transcript := strings.TrimSpace(event.Metadata["transcript_path"]); transcript != "" {
+		return target + "/workspace/" + workspace + "/transcript/" + transcript
+	}
+	return target + "/workspace/" + workspace + "/event/" + firstNonEmpty(strings.TrimSpace(event.Metadata["event_id"]), newHookEventID())
+}
+
+func hookSequence(metadata map[string]string, keys ...string) *int64 {
+	for _, key := range keys {
+		value := strings.TrimSpace(metadata[key])
+		if value == "" {
+			continue
+		}
+		sequence, err := strconv.ParseInt(value, 10, 64)
+		if err == nil && sequence > 0 {
+			return &sequence
+		}
+	}
+	return nil
+}
+
 func (r runner) sendHookToBuffer(event facade.HookEvent) (hookBufferResponse, error) {
+	if event.Metadata == nil {
+		event.Metadata = make(map[string]string)
+	}
+	if strings.TrimSpace(event.Metadata["event_id"]) == "" {
+		event.Metadata["event_id"] = newHookEventID()
+	}
 	socket := hookSocketPath(r.configFile())
 	response, err := sendHookBufferRequest(socket, event)
 	if err != nil {
@@ -1078,9 +1176,10 @@ func sendHookBufferRequest(socket string, event facade.HookEvent) (hookBufferRes
 		raw = json.RawMessage(`{}`)
 	}
 	request := hookBufferRequest{
-		Target: event.Target,
-		Event:  event.Event,
-		Raw:    raw,
+		EventID: event.Metadata["event_id"],
+		Target:  event.Target,
+		Event:   event.Event,
+		Raw:     raw,
 	}
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		return hookBufferResponse{}, err
@@ -1092,12 +1191,42 @@ func sendHookBufferRequest(socket string, event facade.HookEvent) (hookBufferRes
 	return response, nil
 }
 
+func newHookEventID() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err == nil {
+		return "evt_" + hex.EncodeToString(bytes)
+	}
+	return "evt_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
 func flushExistingHookBuffer(configPath string, shutdown bool) error {
-	conn, err := net.DialTimeout("unix", hookSocketPath(configPath), 250*time.Millisecond)
+	socketPath := hookSocketPath(configPath)
+	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
+		lockPath := hookDaemonLockPath(configPath)
+		if pathDoesNotExist(lockPath) {
+			return nil
+		}
+		deadline := time.Now().Add(time.Second)
+		for pathDoesNotExist(socketPath) {
+			if pathDoesNotExist(lockPath) {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return errors.New("hook daemon lock exists but socket did not become ready")
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	} else if err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("unix", socketPath, 250*time.Millisecond)
 	if err != nil {
-		return nil
+		return err
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(35 * time.Second)); err != nil {
+		return err
+	}
 	action := "flush"
 	if shutdown {
 		action = "shutdown"
@@ -1112,7 +1241,30 @@ func flushExistingHookBuffer(configPath string, shutdown bool) error {
 	if !response.OK {
 		return errors.New(firstNonEmpty(response.Error, "hook buffer flush failed"))
 	}
+	if shutdown {
+		return waitForHookDaemonStop(configPath, 5*time.Second)
+	}
 	return nil
+}
+
+func waitForHookDaemonStop(configPath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		socketGone := pathDoesNotExist(hookSocketPath(configPath))
+		lockGone := pathDoesNotExist(hookDaemonLockPath(configPath))
+		if socketGone && lockGone {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("hook daemon did not stop before timeout")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func pathDoesNotExist(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func decodeHookEvent(raw []byte, target, eventName string) (facade.HookEvent, error) {
@@ -3458,8 +3610,8 @@ func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {
 	writeNamedCounters(w, "by hook", []string{"hook", "recalls", "inserted", "writes", "flushes", "errors"}, summary.HookEvents, func(counter telemetry.Counter) []string {
 		return []string{formatInt(counter.Recalls), formatInt(counter.Inserted), formatInt(counter.Writes), formatInt(counter.Flushes), formatInt(counter.Errors)}
 	})
-	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "writes", "refs", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
-		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatInt(counter.Writes), formatInt(counter.Refs), formatInt(counter.ProviderErrors)}
+	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "writes", "refs", "avg_write", "avg_passive_latency", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
+		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatInt(counter.Writes), formatInt(counter.Refs), formatAverageMS(counter.ProviderWriteDurationMS, counter.ProviderWriteSamples), formatAverageMS(counter.PassiveWriteLatencyTotalMS, counter.PassiveWriteSamples), formatInt(counter.ProviderErrors)}
 	})
 }
 
@@ -3481,6 +3633,9 @@ func writeLogEvent(w io.Writer, event telemetry.Event) {
 		{name: "target", value: event.Target},
 		{name: "hook_event", value: event.HookEvent},
 		{name: "profile", value: event.Profile},
+		{name: "episode_id", value: event.EpisodeID},
+		{name: "session_key", value: event.SessionKey},
+		{name: "provider", value: event.Provider},
 	} {
 		if strings.TrimSpace(field.value) != "" {
 			parts = append(parts, field.name+"="+formatLogValue(field.value))
@@ -3503,6 +3658,12 @@ func writeLogEvent(w io.Writer, event telemetry.Event) {
 	}
 	if event.DurationMS > 0 {
 		parts = append(parts, "duration_ms="+strconv.FormatInt(event.DurationMS, 10))
+	}
+	if event.ProviderDurationMS > 0 {
+		parts = append(parts, "provider_duration_ms="+strconv.FormatInt(event.ProviderDurationMS, 10))
+	}
+	if event.PassiveWriteLatencyTotalMS > 0 {
+		parts = append(parts, "passive_write_latency_total_ms="+strconv.FormatInt(event.PassiveWriteLatencyTotalMS, 10))
 	}
 	if event.Error != "" {
 		parts = append(parts, "error="+strconv.Quote(event.Error))
@@ -3602,6 +3763,13 @@ func formatInt(value int) string {
 
 func formatInt64(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func formatAverageMS(total int64, samples int) string {
+	if samples == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1fms", float64(total)/float64(samples))
 }
 
 func firstNonEmpty(values ...string) string {

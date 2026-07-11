@@ -53,6 +53,9 @@ func (r runner) runUpdate(args []string) error {
 		return err
 	}
 	updater := newUpdater(options, r.stdout, r.versionString())
+	updater.stderr = r.stderr
+	updater.afterInstall = func() error { return r.shutdownHookDaemonFunc()(r.configFile()) }
+	updater.reloadDaemon = strings.TrimSpace(options.installPath) == ""
 	return updater.Run(context.Background())
 }
 
@@ -60,7 +63,10 @@ type updater struct {
 	options        updateOptions
 	client         *http.Client
 	stdout         io.Writer
+	stderr         io.Writer
 	currentVersion string
+	afterInstall   func() error
+	reloadDaemon   bool
 }
 
 func newUpdater(options updateOptions, stdout io.Writer, currentVersion string) updater {
@@ -83,6 +89,7 @@ func newUpdater(options updateOptions, stdout io.Writer, currentVersion string) 
 		options:        options,
 		client:         &http.Client{Timeout: 2 * time.Minute},
 		stdout:         stdout,
+		stderr:         io.Discard,
 		currentVersion: currentVersion,
 	}
 }
@@ -137,6 +144,11 @@ func (u updater) Run(ctx context.Context) error {
 	}
 	if err := installBinary(extracted, installPath); err != nil {
 		return err
+	}
+	if u.reloadDaemon && u.afterInstall != nil {
+		if err := u.afterInstall(); err != nil {
+			fmt.Fprintf(u.stderr, "warning: updated paxm but could not stop the existing hook daemon: %v\n", err)
+		}
 	}
 	fmt.Fprintf(u.stdout, "updated paxm: %s -> %s\n", u.currentVersion, tag)
 	fmt.Fprintf(u.stdout, "installed: %s\n", installPath)

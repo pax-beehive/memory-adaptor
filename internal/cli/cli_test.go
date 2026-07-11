@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pax-beehive/memory-adaptor/internal/adapters"
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	paxeval "github.com/pax-beehive/memory-adaptor/internal/eval"
@@ -979,151 +977,6 @@ func TestCodexTranscriptToolMessagesReadsCurrentTurnAndExcludesReasoning(t *test
 			t.Fatalf("leaked %q in %q", forbidden, joined)
 		}
 	}
-}
-
-func TestHookBufferShutdownFlushesPendingItems(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.DefaultConfig(configPath)
-	provider := cfg.Providers["sqlite"]
-	provider.Path = filepath.Join(t.TempDir(), "memory.sqlite")
-	cfg.Providers["sqlite"] = provider
-	router, err := adapters.DefaultRegistry().BuildRouter(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := facade.New(cfg, router)
-	buffer := []facade.IngestInput{{
-		Text:    "shutdown flush sentinel",
-		Profile: "default",
-		Source:  "test",
-	}}
-	serverConn, clientConn := net.Pipe()
-	t.Cleanup(func() {
-		_ = serverConn.Close()
-		_ = clientConn.Close()
-	})
-	type result struct {
-		flushed  int
-		shutdown bool
-		err      error
-	}
-	resultCh := make(chan result, 1)
-	cleanupScheduled := make(chan struct{}, 1)
-	go func() {
-		flushed, shutdown, err := handleHookBufferConn(context.Background(), service, serverConn, &buffer, func() {
-			cleanupScheduled <- struct{}{}
-		})
-		resultCh <- result{flushed: flushed, shutdown: shutdown, err: err}
-	}()
-	if err := writeJSON(clientConn, hookBufferRequest{Action: "shutdown"}); err != nil {
-		t.Fatal(err)
-	}
-	var response hookBufferResponse
-	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	got := <-resultCh
-	if got.err != nil || !got.shutdown || got.flushed != 1 || !response.OK || response.Flushed != 1 {
-		t.Fatalf("unexpected shutdown result: result=%#v response=%#v", got, response)
-	}
-	if len(buffer) != 0 {
-		t.Fatalf("buffer was not cleared: %#v", buffer)
-	}
-	select {
-	case <-cleanupScheduled:
-	default:
-		t.Fatal("shutdown flush did not schedule cleanup")
-	}
-	recalled, err := service.Recall(context.Background(), facade.RecallInput{Query: "shutdown flush sentinel", Profile: "default", Limit: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(recalled.Hits) == 0 || !strings.Contains(recalled.Hits[0].Text, "shutdown flush sentinel") {
-		t.Fatalf("flushed item was not persisted: %#v", recalled.Hits)
-	}
-}
-
-func TestPostToolUseBuffersAndPersistsOnTurnFlush(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.DefaultConfig(configPath)
-	claude := cfg.Agents["claude"]
-	claude.Enabled = true
-	cfg.Agents["claude"] = claude
-	provider := cfg.Providers["sqlite"]
-	provider.Path = filepath.Join(t.TempDir(), "memory.sqlite")
-	cfg.Providers["sqlite"] = provider
-	router, err := adapters.DefaultRegistry().BuildRouter(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := facade.New(cfg, router)
-	var buffer []facade.IngestInput
-	toolRaw := json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"output":"PASS"}}`)
-	response := runHookBufferRequestForTest(t, service, &buffer, hookBufferRequest{Target: "claude", Event: "tool_use", Raw: toolRaw})
-	if !response.OK || !response.Buffered || len(buffer) != 1 || !strings.Contains(buffer[0].Text, "go test ./...") || !strings.Contains(buffer[0].Text, "PASS") {
-		t.Fatalf("tool buffer response=%#v buffer=%#v", response, buffer)
-	}
-	response = runHookBufferRequestForTest(t, service, &buffer, hookBufferRequest{Action: "flush"})
-	if !response.OK || response.Flushed != 1 || len(buffer) != 0 {
-		t.Fatalf("flush response=%#v buffer=%#v", response, buffer)
-	}
-	recalled, err := service.Recall(context.Background(), facade.RecallInput{Query: "go test PASS", Profile: "default", Limit: 3})
-	if err != nil || len(recalled.Hits) != 1 {
-		t.Fatalf("recall=%#v err=%v", recalled, err)
-	}
-}
-
-func TestCodexTurnEndPersistsTranscriptToolContent(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.DefaultConfig(configPath)
-	provider := cfg.Providers["sqlite"]
-	provider.Path = filepath.Join(t.TempDir(), "memory.sqlite")
-	cfg.Providers["sqlite"] = provider
-	router, err := adapters.DefaultRegistry().BuildRouter(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := facade.New(cfg, router)
-	transcriptPath, err := filepath.Abs(filepath.Join("testdata", "codex-turn-tools.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := json.Marshal(map[string]any{"transcript_path": transcriptPath, "last_assistant_message": "Tool inspection complete."})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buffer []facade.IngestInput
-	response := runHookBufferRequestForTest(t, service, &buffer, hookBufferRequest{Target: "codex", Event: "turn_end", Raw: raw})
-	if !response.OK || response.Flushed != 1 || len(buffer) != 0 {
-		t.Fatalf("response=%#v buffer=%#v", response, buffer)
-	}
-	recalled, err := service.Recall(context.Background(), facade.RecallInput{Query: "README Pax Agent neXus", Profile: "default", Limit: 3})
-	if err != nil || len(recalled.Hits) != 1 || strings.Contains(recalled.Hits[0].Text, "private") {
-		t.Fatalf("recall=%#v err=%v", recalled, err)
-	}
-}
-
-func runHookBufferRequestForTest(t *testing.T, service *facade.Service, buffer *[]facade.IngestInput, request hookBufferRequest) hookBufferResponse {
-	t.Helper()
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-	done := make(chan error, 1)
-	go func() {
-		_, _, err := handleHookBufferConn(context.Background(), service, serverConn, buffer, func() {})
-		done <- err
-	}()
-	if err := writeJSON(clientConn, request); err != nil {
-		t.Fatal(err)
-	}
-	var response hookBufferResponse
-	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	return response
 }
 
 func TestHookCleanupWorkerSchedulesWithoutBlockingAndDrainsOnClose(t *testing.T) {
@@ -2182,7 +2035,7 @@ func TestHistoryFormattingHelpersTable(t *testing.T) {
 				Profiles:   []telemetry.NamedCounter{{Name: "default", Counter: telemetry.Counter{Recalls: 2, Hits: 5}}},
 				Agents:     []telemetry.NamedCounter{{Name: "codex", Counter: telemetry.Counter{Recalls: 2, Writes: 1, Inserted: 1, Flushes: 1}}},
 				HookEvents: []telemetry.NamedCounter{{Name: "codex/user_input", Counter: telemetry.Counter{Recalls: 2, Inserted: 1}}},
-				Providers:  []telemetry.NamedCounter{{Name: "sqlite", Counter: telemetry.Counter{Writes: 2, Refs: 1, Recalls: 2, Hits: 5, ProviderErrors: 1}}},
+				Providers:  []telemetry.NamedCounter{{Name: "sqlite", Counter: telemetry.Counter{Writes: 2, Refs: 1, Recalls: 2, Hits: 5, ProviderErrors: 1, ProviderWriteSamples: 2, ProviderWriteDurationMS: 24, PassiveWriteSamples: 3, PassiveWriteLatencyTotalMS: 360}}},
 				Storage: telemetry.StorageInfo{
 					EventBytes: 10,
 					TotalBytes: 20,
@@ -2190,7 +2043,7 @@ func TestHistoryFormattingHelpersTable(t *testing.T) {
 					MaxFiles:   2,
 				},
 			},
-			want: []string{"status: attention", "overview", "recall funnel", "20.0%", "write pipeline", "50.0%", "by day", "by profile", "by agent", "by hook", "by provider"},
+			want: []string{"status: attention", "overview", "recall funnel", "20.0%", "write pipeline", "50.0%", "by day", "by profile", "by agent", "by hook", "by provider", "avg_write", "avg_passive_latency", "12.0ms", "120.0ms"},
 		},
 	}
 

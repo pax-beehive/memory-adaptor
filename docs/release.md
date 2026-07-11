@@ -107,4 +107,9 @@ Useful flags:
   tag.
 
 `paxm update` verifies the downloaded archive against the release `SHA256SUMS`
-before replacing the binary.
+before replacing the binary. After a successful in-place install it safely shuts
+down the existing hook daemon, which durably seals pending capture state first.
+The updater waits for the socket and lock to disappear; the next real hook starts
+the updated daemon and resumes delivery. `--check` and `--install-path` do not
+stop the current daemon, and a shutdown failure is a warning rather than an
+update rollback.
