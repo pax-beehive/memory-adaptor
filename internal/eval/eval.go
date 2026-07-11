@@ -90,6 +90,7 @@ type Result struct {
 	AdapterContractCases   int           `json:"adapter_contract_cases,omitempty"`
 	AdapterContractPassed  int           `json:"adapter_contract_passed,omitempty"`
 	AdapterContractFailed  int           `json:"adapter_contract_failed,omitempty"`
+	ExecutionFailed        int           `json:"execution_failed,omitempty"`
 	RecallAtK              float64       `json:"recall_at_k"`
 	PrecisionAtK           float64       `json:"precision_at_k"`
 	MRR                    float64       `json:"mrr"`
@@ -136,6 +137,7 @@ type CaseResult struct {
 	RecallDurationUS         int64    `json:"recall_duration_us,omitempty"`
 	DurationMS               int64    `json:"duration_ms"`
 	Error                    string   `json:"error,omitempty"`
+	ExecutionError           string   `json:"execution_error,omitempty"`
 }
 
 type GroupResult struct {
@@ -363,7 +365,7 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 	}()
 	caseDir := filepath.Join(root, scenario.ID)
 	if err := os.MkdirAll(caseDir, 0o755); err != nil {
-		result.Error = err.Error()
+		result.setExecutionError(err.Error())
 		return result
 	}
 	configPath := filepath.Join(caseDir, "config.yaml")
@@ -373,12 +375,12 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 		cfg.Agents[name] = agent
 	}
 	if err := config.Save(configPath, cfg); err != nil {
-		result.Error = err.Error()
+		result.setExecutionError(err.Error())
 		return result
 	}
 	runtime, err := paxruntime.Load(configPath)
 	if err != nil {
-		result.Error = err.Error()
+		result.setExecutionError(err.Error())
 		return result
 	}
 	var writtenText string
@@ -404,11 +406,11 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 			Metadata:  scenario.Write.Metadata,
 		})
 		if writeErr != nil {
-			result.Error = writeErr.Error()
+			result.setExecutionError(writeErr.Error())
 			return result
 		}
 		if !ok {
-			result.Error = "conversation write was skipped"
+			result.setExecutionError("conversation write was skipped")
 			return result
 		}
 		writtenText, writtenMetadata = item.Text, item.Metadata
@@ -425,7 +427,7 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 		}
 		result.WriteDurationUS = time.Since(writeStarted).Microseconds()
 		if writeErr != nil {
-			result.Error = writeErr.Error()
+			result.setExecutionError(writeErr.Error())
 			return result
 		}
 		result.Written = len(writeResult.Refs) > 0
@@ -435,14 +437,14 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 	for _, item := range scenario.Memories {
 		_, err = runtime.Service.Ingest(ctx, facade.IngestInput{ID: item.ID, Text: item.Text, Profile: profileForTier(item.Tier), Tier: item.Tier, ExpiresAt: item.ExpiresAt, Metadata: item.Metadata, Source: "eval:" + scenario.ID})
 		if err != nil {
-			result.Error = err.Error()
+			result.setExecutionError(err.Error())
 			return result
 		}
 	}
 	if scenario.RestartBeforeRecall {
 		runtime, err = paxruntime.Load(configPath)
 		if err != nil {
-			result.Error = err.Error()
+			result.setExecutionError(err.Error())
 			return result
 		}
 	}
@@ -463,7 +465,7 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 		}
 	}
 	if err != nil {
-		result.Error = err.Error()
+		result.setExecutionError(err.Error())
 		return result
 	}
 	result.RecallDurationUS = time.Since(recallStarted).Microseconds()
@@ -478,6 +480,11 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 		result.score(scenario)
 	}
 	return result
+}
+
+func (r *CaseResult) setExecutionError(message string) {
+	r.Error = message
+	r.ExecutionError = message
 }
 
 func evaluateWriteContract(scenario Case, written bool, text string, metadata map[string]string) []string {
@@ -647,6 +654,9 @@ func (r *CaseResult) score(scenario Case) {
 func (r *Result) aggregate() {
 	groups := map[string][]CaseResult{}
 	for _, c := range r.Cases {
+		if c.ExecutionError != "" {
+			r.ExecutionFailed++
+		}
 		if c.AdapterContractCase {
 			r.AdapterContractCases++
 			if c.AdapterContractPassed {

@@ -266,6 +266,17 @@ func TestAdapterContractCanPassWhenProviderRecallQualityFails(t *testing.T) {
 	}
 }
 
+func TestAggregateSeparatesExecutionFailureFromQualityMiss(t *testing.T) {
+	result := Result{CaseCount: 2, Cases: []CaseResult{
+		{ID: "quality-miss", Error: "expected recall was missing"},
+		{ID: "runtime-error", Error: "provider unavailable", ExecutionError: "provider unavailable"},
+	}}
+	result.aggregate()
+	if result.ExecutionFailed != 1 {
+		t.Fatalf("execution failures = %d, want 1", result.ExecutionFailed)
+	}
+}
+
 func TestRunnerCanWriteFromNormalizedHistory(t *testing.T) {
 	suite := Suite{Version: SuiteVersion, Name: "history-write", Cases: []Case{{
 		ID: "pi-history", Category: "history",

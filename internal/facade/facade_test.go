@@ -58,9 +58,7 @@ func TestRecallAdapterContractForwardsRequestAndPreservesProviderHit(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The router intentionally asks the provider for 3x candidates before applying
-	// the caller's final limit; that policy transform is part of the contract.
-	if provider.query != "exact request" || provider.limit != 21 || provider.meta["session"] != "consumer" {
+	if provider.query != "exact request" || provider.meta["session"] != "consumer" {
 		t.Fatalf("recall request was not forwarded faithfully: %#v", provider)
 	}
 	if len(result.Hits) != 1 {

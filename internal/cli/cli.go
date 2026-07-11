@@ -680,12 +680,18 @@ func (r runner) runEval(args []string) error {
 		if result.AdapterContractCases == 0 {
 			return errors.New("adapter gate requires a suite with conversation writes")
 		}
+		if result.ExecutionFailed > 0 {
+			return fmt.Errorf("eval execution failed: %d cases had runtime or provider errors", result.ExecutionFailed)
+		}
 		if result.AdapterContractFailed > 0 {
 			return fmt.Errorf("adapter contract failed: %d of %d cases failed", result.AdapterContractFailed, result.AdapterContractCases)
 		}
 		return nil
 	}
 	if *gate == "none" {
+		if result.ExecutionFailed > 0 {
+			return fmt.Errorf("eval execution failed: %d cases had runtime or provider errors", result.ExecutionFailed)
+		}
 		return nil
 	}
 	if result.Failed > 0 {
@@ -708,6 +714,9 @@ func writeEvalComparison(w io.Writer, comparison paxeval.Comparison) {
 func writeEvalReport(w io.Writer, result paxeval.Result) {
 	fmt.Fprintf(w, "paxm eval: %s (v%d)\n", result.Suite, result.Version)
 	fmt.Fprintf(w, "cases: %d  passed: %d  failed: %d  duration: %dms\n", result.CaseCount, result.Passed, result.Failed, result.DurationMS)
+	if result.ExecutionFailed > 0 {
+		fmt.Fprintf(w, "execution failures: %d\n", result.ExecutionFailed)
+	}
 	fmt.Fprintf(w, "recall@k: %.3f  precision@k: %.3f  mrr: %.3f  false-positive rate: %.3f\n", result.RecallAtK, result.PrecisionAtK, result.MRR, result.FalsePositiveRate)
 	if result.AdapterContractCases > 0 {
 		fmt.Fprintf(w, "adapter contract: %d/%d passed  failed: %d\n", result.AdapterContractPassed, result.AdapterContractCases, result.AdapterContractFailed)
