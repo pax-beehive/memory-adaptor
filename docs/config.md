@@ -593,7 +593,11 @@ capture_queue:
 Different providers are delivered concurrently and maintain independent ACK and
 retry state. Episodes remain ordered within the same provider/session pair, so a
 later episode cannot bypass an earlier failed delivery. `hook_delivery`
-telemetry records the episode, session, provider, duration, reference, and error.
+telemetry records the episode, session, provider, reference, error, provider call
+duration, and average per-message time from durable capture to provider ACK.
+`paxm history` reports the last two values as `avg_write` and
+`avg_passive_latency` for each provider. Only successful ACKs contribute to the
+averages.
 
 After any successful daemon flush or immediate hook write, paxm schedules
 expired-memory cleanup on a single daemon worker. This is best effort and only

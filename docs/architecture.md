@@ -351,9 +351,9 @@ are not removed.
 
 ## Local Telemetry
 
-The CLI records local telemetry after recall, remember, hook recall, and hook
-write-buffer operations. Telemetry is best effort: write failures are reported to
-stderr but do not fail the memory operation.
+The CLI records local telemetry after recall, remember, hook recall, durable
+capture, and provider delivery operations. Telemetry is best effort: write
+failures are reported to stderr but do not fail the memory operation.
 
 Telemetry has two storage paths:
 
@@ -376,7 +376,10 @@ The MCP interface keeps only aggregate `paxm_history`; raw logs remain local.
 Default events avoid storing raw query or memory text. They include query length,
 a query hash prefix, profile, hook event, agent target, hit/insert/write counts,
 provider recall/write counts, provider hit/ref counts, provider error counts,
-and duration.
+and duration. Successful passive deliveries separately record provider call
+duration and average per-message latency from durable capture to provider ACK.
+`paxm history` aggregates both values by provider without including failed
+attempts in the averages.
 
 ## Release Pipeline
 

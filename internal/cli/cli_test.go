@@ -2035,7 +2035,7 @@ func TestHistoryFormattingHelpersTable(t *testing.T) {
 				Profiles:   []telemetry.NamedCounter{{Name: "default", Counter: telemetry.Counter{Recalls: 2, Hits: 5}}},
 				Agents:     []telemetry.NamedCounter{{Name: "codex", Counter: telemetry.Counter{Recalls: 2, Writes: 1, Inserted: 1, Flushes: 1}}},
 				HookEvents: []telemetry.NamedCounter{{Name: "codex/user_input", Counter: telemetry.Counter{Recalls: 2, Inserted: 1}}},
-				Providers:  []telemetry.NamedCounter{{Name: "sqlite", Counter: telemetry.Counter{Writes: 2, Refs: 1, Recalls: 2, Hits: 5, ProviderErrors: 1}}},
+				Providers:  []telemetry.NamedCounter{{Name: "sqlite", Counter: telemetry.Counter{Writes: 2, Refs: 1, Recalls: 2, Hits: 5, ProviderErrors: 1, ProviderWriteSamples: 2, ProviderWriteDurationMS: 24, PassiveWriteSamples: 3, PassiveWriteLatencyTotalMS: 360}}},
 				Storage: telemetry.StorageInfo{
 					EventBytes: 10,
 					TotalBytes: 20,
@@ -2043,7 +2043,7 @@ func TestHistoryFormattingHelpersTable(t *testing.T) {
 					MaxFiles:   2,
 				},
 			},
-			want: []string{"status: attention", "overview", "recall funnel", "20.0%", "write pipeline", "50.0%", "by day", "by profile", "by agent", "by hook", "by provider"},
+			want: []string{"status: attention", "overview", "recall funnel", "20.0%", "write pipeline", "50.0%", "by day", "by profile", "by agent", "by hook", "by provider", "avg_write", "avg_passive_latency", "12.0ms", "120.0ms"},
 		},
 	}
 

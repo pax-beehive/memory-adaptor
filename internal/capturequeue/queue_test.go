@@ -44,6 +44,9 @@ func TestDuplicateEventIDRejectsDifferentPayload(t *testing.T) {
 	if _, err := queue.Append(ctx, first); err != nil {
 		t.Fatal(err)
 	}
+	if receipt, err := queue.Append(ctx, first); err != nil || !receipt.Duplicate {
+		t.Fatalf("identical retry was not idempotent: receipt=%#v err=%v", receipt, err)
+	}
 	first.Item.Text = "changed"
 	if _, err := queue.Append(ctx, first); err == nil {
 		t.Fatal("conflicting duplicate event was accepted")
@@ -584,5 +587,67 @@ func TestConfiguredProviderConcurrencyIsEnforced(t *testing.T) {
 	}
 	if maximum.Load() != 1 {
 		t.Fatalf("maximum concurrency=%d, want 1", maximum.Load())
+	}
+}
+
+func TestDeliveryOutcomeSeparatesProviderDurationFromPassiveWriteLatency(t *testing.T) {
+	ctx := context.Background()
+	capturedAt := time.Now().UTC().Add(-200 * time.Millisecond)
+	var outcome capturequeue.DeliveryOutcome
+	queue, err := capturequeue.Open(filepath.Join(t.TempDir(), "capture.sqlite"), capturequeue.Options{
+		Providers: func(string) []string { return []string{"sqlite"} },
+		Deliver: func(context.Context, string, capturequeue.Episode) (string, error) {
+			time.Sleep(10 * time.Millisecond)
+			return "ref", nil
+		},
+		OnDelivery: func(value capturequeue.DeliveryOutcome) { outcome = value },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	if _, err := queue.Append(ctx, capturequeue.Event{SessionKey: "session", Terminal: true, Item: facade.IngestInput{Text: "event", Profile: "ltm", CreatedAt: capturedAt}}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := queue.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Duration < 8*time.Millisecond || outcome.Duration > 100*time.Millisecond {
+		t.Fatalf("provider duration=%s", outcome.Duration)
+	}
+	if outcome.PassiveWriteSamples != 1 || outcome.PassiveWriteLatencyTotal < 25*time.Millisecond || outcome.PassiveWriteLatencyTotal > time.Second {
+		t.Fatalf("passive write latency total=%s samples=%d", outcome.PassiveWriteLatencyTotal, outcome.PassiveWriteSamples)
+	}
+}
+
+func TestPassiveWriteCaptureTimeSurvivesQueueRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "capture.sqlite")
+	queue, err := capturequeue.Open(path, capturequeue.Options{Providers: func(string) []string { return []string{"sqlite"} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Append(ctx, capturequeue.Event{SessionKey: "session", Terminal: true, Item: facade.IngestInput{Text: "event", Profile: "ltm"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	var outcome capturequeue.DeliveryOutcome
+	queue, err = capturequeue.Open(path, capturequeue.Options{
+		Deliver:    func(context.Context, string, capturequeue.Episode) (string, error) { return "ref", nil },
+		OnDelivery: func(value capturequeue.DeliveryOutcome) { outcome = value },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	if _, err := queue.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if outcome.PassiveWriteSamples != 1 || outcome.PassiveWriteLatencyTotal < 15*time.Millisecond {
+		t.Fatalf("restart lost capture time: total=%s samples=%d", outcome.PassiveWriteLatencyTotal, outcome.PassiveWriteSamples)
 	}
 }

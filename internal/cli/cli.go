@@ -917,18 +917,21 @@ func (r runner) runHookDaemon(args []string) error {
 				hookEvent = "delivery_dead"
 			}
 			event := telemetry.Event{
-				Time:       time.Now().UTC(),
-				Kind:       "hook_delivery",
-				Source:     "capture_queue",
-				Command:    "hook",
-				HookEvent:  hookEvent,
-				Success:    outcome.Err == nil,
-				DurationMS: outcome.Duration.Milliseconds(),
-				ItemCount:  1,
-				EpisodeID:  outcome.EpisodeID,
-				SessionKey: outcome.SessionKey,
-				Provider:   outcome.Provider,
-				Error:      paxruntime.TelemetryError(outcome.Err),
+				Time:                       time.Now().UTC(),
+				Kind:                       "hook_delivery",
+				Source:                     "capture_queue",
+				Command:                    "hook",
+				HookEvent:                  hookEvent,
+				Success:                    outcome.Err == nil,
+				DurationMS:                 outcome.Duration.Milliseconds(),
+				ProviderDurationMS:         outcome.Duration.Milliseconds(),
+				PassiveWriteLatencyTotalMS: outcome.PassiveWriteLatencyTotal.Milliseconds(),
+				PassiveWriteSamples:        outcome.PassiveWriteSamples,
+				ItemCount:                  1,
+				EpisodeID:                  outcome.EpisodeID,
+				SessionKey:                 outcome.SessionKey,
+				Provider:                   outcome.Provider,
+				Error:                      paxruntime.TelemetryError(outcome.Err),
 			}
 			if outcome.Err != nil {
 				event.ProviderErrorDetails = []telemetry.ProviderErrorDetail{{Provider: outcome.Provider, Op: "put"}}
@@ -3544,8 +3547,8 @@ func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {
 	writeNamedCounters(w, "by hook", []string{"hook", "recalls", "inserted", "writes", "flushes", "errors"}, summary.HookEvents, func(counter telemetry.Counter) []string {
 		return []string{formatInt(counter.Recalls), formatInt(counter.Inserted), formatInt(counter.Writes), formatInt(counter.Flushes), formatInt(counter.Errors)}
 	})
-	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "writes", "refs", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
-		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatInt(counter.Writes), formatInt(counter.Refs), formatInt(counter.ProviderErrors)}
+	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "writes", "refs", "avg_write", "avg_passive_latency", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
+		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatInt(counter.Writes), formatInt(counter.Refs), formatAverageMS(counter.ProviderWriteDurationMS, counter.ProviderWriteSamples), formatAverageMS(counter.PassiveWriteLatencyTotalMS, counter.PassiveWriteSamples), formatInt(counter.ProviderErrors)}
 	})
 }
 
@@ -3592,6 +3595,12 @@ func writeLogEvent(w io.Writer, event telemetry.Event) {
 	}
 	if event.DurationMS > 0 {
 		parts = append(parts, "duration_ms="+strconv.FormatInt(event.DurationMS, 10))
+	}
+	if event.ProviderDurationMS > 0 {
+		parts = append(parts, "provider_duration_ms="+strconv.FormatInt(event.ProviderDurationMS, 10))
+	}
+	if event.PassiveWriteLatencyTotalMS > 0 {
+		parts = append(parts, "passive_write_latency_total_ms="+strconv.FormatInt(event.PassiveWriteLatencyTotalMS, 10))
 	}
 	if event.Error != "" {
 		parts = append(parts, "error="+strconv.Quote(event.Error))
@@ -3691,6 +3700,13 @@ func formatInt(value int) string {
 
 func formatInt64(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+func formatAverageMS(total int64, samples int) string {
+	if samples == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1fms", float64(total)/float64(samples))
 }
 
 func firstNonEmpty(values ...string) string {

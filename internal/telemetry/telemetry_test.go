@@ -253,6 +253,30 @@ func TestRecorderAggregatesPassiveAgentsAndProviderWrites(t *testing.T) {
 	}
 }
 
+func TestRecorderAggregatesProviderWriteAndPassiveLatencySeparately(t *testing.T) {
+	t.Parallel()
+	enabled := true
+	dir := t.TempDir()
+	recorder := NewRecorder(config.TelemetryConfig{Enabled: &enabled, Dir: dir, RetentionDays: 7}, filepath.Join(dir, "config.yaml"))
+	for _, event := range []Event{
+		{Time: time.Now().UTC(), Kind: "hook_delivery", Success: true, Provider: "sqlite", ProviderWrites: map[string]int{"sqlite": 1}, ProviderDurationMS: 10, PassiveWriteLatencyTotalMS: 110, PassiveWriteSamples: 1},
+		{Time: time.Now().UTC(), Kind: "hook_delivery", Success: true, Provider: "sqlite", ProviderWrites: map[string]int{"sqlite": 1}, ProviderDurationMS: 30, PassiveWriteLatencyTotalMS: 380, PassiveWriteSamples: 2},
+		{Time: time.Now().UTC(), Kind: "hook_delivery", Success: false, Provider: "sqlite", ProviderDurationMS: 999, PassiveWriteLatencyTotalMS: 999, PassiveWriteSamples: 1},
+	} {
+		if err := recorder.Record(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	summary, err := recorder.History(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := summary.Providers[0].Counter
+	if provider.ProviderWriteSamples != 2 || provider.ProviderWriteDurationMS != 40 || provider.PassiveWriteSamples != 3 || provider.PassiveWriteLatencyTotalMS != 490 {
+		t.Fatalf("unexpected provider latency aggregates: %#v", provider)
+	}
+}
+
 func TestQueryFieldsAvoidPreviewByDefault(t *testing.T) {
 	t.Parallel()
 
