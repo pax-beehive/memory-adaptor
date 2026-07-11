@@ -21,15 +21,15 @@ import (
 	"strings"
 	"time"
 
-	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
-	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
-	"github.com/pax-beehive/memory-adaptor/internal/config"
-	paxeval "github.com/pax-beehive/memory-adaptor/internal/eval"
-	"github.com/pax-beehive/memory-adaptor/internal/facade"
-	"github.com/pax-beehive/memory-adaptor/internal/mcp"
-	"github.com/pax-beehive/memory-adaptor/internal/memory"
-	paxruntime "github.com/pax-beehive/memory-adaptor/internal/runtime"
-	"github.com/pax-beehive/memory-adaptor/internal/telemetry"
+	zepadapter "github.com/pax-beehive/paxm/internal/adapters/zep"
+	"github.com/pax-beehive/paxm/internal/capturequeue"
+	"github.com/pax-beehive/paxm/internal/config"
+	paxeval "github.com/pax-beehive/paxm/internal/eval"
+	"github.com/pax-beehive/paxm/internal/facade"
+	"github.com/pax-beehive/paxm/internal/mcp"
+	"github.com/pax-beehive/paxm/internal/memory"
+	paxruntime "github.com/pax-beehive/paxm/internal/runtime"
+	"github.com/pax-beehive/paxm/internal/telemetry"
 )
 
 const (
@@ -3707,6 +3707,7 @@ func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {
 		{"errors", formatInt(summary.Totals.Errors)},
 		{"skipped", formatInt(summary.Totals.Skipped)},
 		{"provider_errors", formatInt(summary.Totals.ProviderErrors)},
+		{"recall_timeouts", formatInt(summary.Totals.RecallTimeouts)},
 	})
 	writeHistoryTable(w, "recall funnel", []string{"recalls", "hits", "inserted", "insert_rate"}, [][]string{{
 		formatInt(summary.Totals.Recalls),
@@ -3753,8 +3754,8 @@ func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {
 	writeNamedCounters(w, "by hook", []string{"hook", "recalls", "inserted", "writes", "flushes", "errors"}, summary.HookEvents, func(counter telemetry.Counter) []string {
 		return []string{formatInt(counter.Recalls), formatInt(counter.Inserted), formatInt(counter.Writes), formatInt(counter.Flushes), formatInt(counter.Errors)}
 	})
-	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "writes", "refs", "avg_write", "avg_passive_latency", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
-		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatInt(counter.Writes), formatInt(counter.Refs), formatAverageMS(counter.ProviderWriteDurationMS, counter.ProviderWriteSamples), formatAverageMS(counter.PassiveWriteLatencyTotalMS, counter.PassiveWriteSamples), formatInt(counter.ProviderErrors)}
+	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "avg_recall", "p95_recall", "recall_timeouts", "bulkhead_skips", "writes", "refs", "avg_write", "avg_passive_latency", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
+		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatAverageMS(counter.ProviderRecallDurationMS, counter.ProviderRecallSamples), formatDurationMS(telemetry.ProviderRecallP95MS(counter)), formatInt(counter.ProviderRecallTimeouts), formatInt(counter.ProviderRecallBulkheadSkips), formatInt(counter.Writes), formatInt(counter.Refs), formatAverageMS(counter.ProviderWriteDurationMS, counter.ProviderWriteSamples), formatAverageMS(counter.PassiveWriteLatencyTotalMS, counter.PassiveWriteSamples), formatInt(counter.ProviderErrors)}
 	})
 }
 
@@ -3913,6 +3914,13 @@ func formatAverageMS(total int64, samples int) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.1fms", float64(total)/float64(samples))
+}
+
+func formatDurationMS(value int64) string {
+	if value == 0 {
+		return "n/a"
+	}
+	return strconv.FormatInt(value, 10) + "ms"
 }
 
 func firstNonEmpty(values ...string) string {

@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +33,8 @@ const (
 	initialRecallMinScore     = 0.35
 
 	defaultHookRecallMaxResults      = passiveRecallMaxResults
+	defaultPassiveRecallTimeout      = "800ms"
+	defaultProviderRecallTimeout     = "250ms"
 	defaultHookInsertionMinScore     = 0.8
 	defaultHookInsertionMaxItems     = passiveRecallMaxResults
 	defaultHookBufferFlushCount      = 10
@@ -98,6 +98,7 @@ type ProviderRouteConfig struct {
 	Name       string                 `json:"name" yaml:"name"`
 	Required   bool                   `json:"required" yaml:"required"`
 	Weight     float64                `json:"weight,omitempty" yaml:"weight,omitempty"`
+	Timeout    string                 `json:"timeout,omitempty" yaml:"timeout,omitempty"`
 	Thresholds *RecallThresholdConfig `json:"thresholds,omitempty" yaml:"thresholds,omitempty"`
 }
 
@@ -163,6 +164,7 @@ type HookRecallConfig struct {
 	Profile       string              `json:"profile,omitempty" yaml:"profile,omitempty"`
 	QueryTemplate string              `json:"query_template,omitempty" yaml:"query_template,omitempty"`
 	MaxResults    int                 `json:"max_results,omitempty" yaml:"max_results,omitempty"`
+	Timeout       string              `json:"timeout,omitempty" yaml:"timeout,omitempty"`
 	Output        string              `json:"output,omitempty" yaml:"output,omitempty"`
 	Insertion     HookInsertionConfig `json:"insertion,omitempty" yaml:"insertion,omitempty"`
 	Initial       *HookInitialRecall  `json:"initial,omitempty" yaml:"initial,omitempty"`
@@ -173,6 +175,7 @@ type HookInitialRecall struct {
 	Profile       string              `json:"profile,omitempty" yaml:"profile,omitempty"`
 	QueryTemplate string              `json:"query_template,omitempty" yaml:"query_template,omitempty"`
 	MaxResults    int                 `json:"max_results,omitempty" yaml:"max_results,omitempty"`
+	Timeout       string              `json:"timeout,omitempty" yaml:"timeout,omitempty"`
 	Insertion     HookInsertionConfig `json:"insertion,omitempty" yaml:"insertion,omitempty"`
 }
 
@@ -344,6 +347,7 @@ func DefaultConfig(configPath string) Config {
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    defaultHookRecallMaxResults,
+							Timeout:       defaultPassiveRecallTimeout,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
 								MinScore:          defaultHookInsertionMinScore,
@@ -404,6 +408,7 @@ func DefaultConfig(configPath string) Config {
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    defaultHookRecallMaxResults,
+							Timeout:       defaultPassiveRecallTimeout,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
 								MinScore:          defaultHookInsertionMinScore,
@@ -452,6 +457,7 @@ func DefaultConfig(configPath string) Config {
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    defaultHookRecallMaxResults,
+							Timeout:       defaultPassiveRecallTimeout,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
 								MinScore:          defaultHookInsertionMinScore,
@@ -556,104 +562,18 @@ func Save(path string, cfg Config) error {
 }
 
 func Validate(cfg Config) error {
-	for name, value := range map[string]string{
-		"max_episode_age": cfg.CaptureQueue.MaxEpisodeAge,
-		"retry_min":       cfg.CaptureQueue.RetryMin,
+	for _, validate := range []func(Config) error{
+		validateCaptureQueue,
+		validateAgentIntegrationOwners,
+		validateRecallProfiles,
+		validateAgentRecallTimeouts,
+		validateWriteProfiles,
 	} {
-		if strings.TrimSpace(value) == "" {
-			continue
-		}
-		duration, err := time.ParseDuration(value)
-		if err != nil || duration <= 0 {
-			return fmt.Errorf("capture_queue.%s must be a positive duration", name)
-		}
-	}
-	for provider, concurrency := range cfg.CaptureQueue.ProviderConcurrency {
-		if concurrency <= 0 {
-			return fmt.Errorf("capture_queue.provider_concurrency.%s must be positive", provider)
-		}
-	}
-	if cfg.CaptureQueue.MaxAttempts < 0 {
-		return errors.New("capture_queue.max_attempts must not be negative")
-	}
-	for name, agent := range cfg.Agents {
-		owner := strings.TrimSpace(strings.ToLower(agent.Integration.Owner))
-		if owner == "" || owner == IntegrationOwnerPaxm || owner == IntegrationOwnerCodexPlugin || owner == IntegrationOwnerClaudePlugin {
-			if owner == IntegrationOwnerCodexPlugin && name != "codex" {
-				return fmt.Errorf("agent %q cannot use integration owner %q", name, owner)
-			}
-			if owner == IntegrationOwnerClaudePlugin && name != "claude" {
-				return fmt.Errorf("agent %q cannot use integration owner %q", name, owner)
-			}
-			continue
-		}
-		return fmt.Errorf("agent %q has invalid integration owner %q; expected paxm, codex-plugin, or claude-plugin", name, agent.Integration.Owner)
-	}
-
-	recallNames := sortedKeys(cfg.RecallProfiles)
-	for _, name := range recallNames {
-		for _, tier := range cfg.RecallProfiles[name].Tiers {
-			if _, ok := canonicalTier(tier); !ok {
-				return fmt.Errorf("recall profile %q has invalid tier %q; expected stm or ltm", name, tier)
-			}
-		}
-	}
-
-	writeNames := sortedKeys(cfg.WriteProfiles)
-	for _, name := range writeNames {
-		profile := cfg.WriteProfiles[name]
-		tier := strings.TrimSpace(profile.Tier)
-		if tier != "" {
-			var ok bool
-			tier, ok = canonicalTier(tier)
-			if !ok {
-				return fmt.Errorf("write profile %q has invalid tier %q; expected stm or ltm", name, profile.Tier)
-			}
-		} else if strings.EqualFold(strings.TrimSpace(name), "stm") {
-			tier = "stm"
-		} else {
-			tier = "ltm"
-		}
-
-		expiresAfter := strings.TrimSpace(profile.ExpiresAfter)
-		if tier == "ltm" {
-			if expiresAfter != "" {
-				return fmt.Errorf("write profile %q with tier ltm must not set expires_after", name)
-			}
-			continue
-		}
-		if expiresAfter == "" {
-			return fmt.Errorf("write profile %q with tier stm requires expires_after", name)
-		}
-		duration, err := time.ParseDuration(expiresAfter)
-		if err != nil {
-			return fmt.Errorf("write profile %q has invalid expires_after %q: %w", name, profile.ExpiresAfter, err)
-		}
-		if duration <= 0 {
-			return fmt.Errorf("write profile %q expires_after must be positive", name)
+		if err := validate(cfg); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-func sortedKeys[T any](values map[string]T) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func canonicalTier(value string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "stm":
-		return "stm", true
-	case "ltm":
-		return "ltm", true
-	default:
-		return "", false
-	}
 }
 
 func Exists(path string) bool {
@@ -686,7 +606,15 @@ func Normalize(cfg Config) Config {
 		}
 	}
 	for name, profile := range cfg.RecallProfiles {
-		cfg.RecallProfiles[name] = normalizeRecallProfile(profile)
+		profile = normalizeRecallProfile(profile)
+		if name == "passive" || name == "passive_initial" {
+			for i := range profile.Providers {
+				if profile.Providers[i].Timeout == "" {
+					profile.Providers[i].Timeout = defaultProviderRecallTimeout
+				}
+			}
+		}
+		cfg.RecallProfiles[name] = profile
 	}
 	if _, ok := cfg.RecallProfiles["passive"]; !ok {
 		cfg.RecallProfiles["passive"] = PassiveRecallProfileFrom(cfg.RecallProfiles["default"])
@@ -1043,6 +971,9 @@ func normalizeHookRecall(name string, hook AgentHookConfig) AgentHookConfig {
 	if hook.Recall.Output == "" {
 		hook.Recall.Output = "markdown"
 	}
+	if hook.Recall.Enabled && hook.Recall.Timeout == "" {
+		hook.Recall.Timeout = defaultPassiveRecallTimeout
+	}
 	if hook.Recall.Initial != nil {
 		normalizeInitialHookRecall(hook.Recall.Initial, hook.Recall)
 	}
@@ -1058,6 +989,9 @@ func normalizeInitialHookRecall(initial *HookInitialRecall, recall HookRecallCon
 	}
 	if initial.MaxResults == 0 {
 		initial.MaxResults = recall.MaxResults
+	}
+	if initial.Timeout == "" {
+		initial.Timeout = recall.Timeout
 	}
 }
 
@@ -1081,8 +1015,12 @@ func normalizeHookWrite(hook AgentHookConfig) AgentHookConfig {
 }
 
 func PassiveRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
+	routes := append([]ProviderRouteConfig(nil), base.Providers...)
+	for i := range routes {
+		routes[i].Timeout = defaultProviderRecallTimeout
+	}
 	return RecallProfileConfig{
-		Providers:  append([]ProviderRouteConfig(nil), base.Providers...),
+		Providers:  routes,
 		MaxResults: passiveRecallMaxResults,
 		Thresholds: RecallThresholdConfig{
 			MinRelevance: passiveRecallMinRelevance,
@@ -1097,8 +1035,12 @@ func PassiveRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
 }
 
 func PassiveInitialRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
+	routes := append([]ProviderRouteConfig(nil), base.Providers...)
+	for i := range routes {
+		routes[i].Timeout = defaultProviderRecallTimeout
+	}
 	return RecallProfileConfig{
-		Providers:  append([]ProviderRouteConfig(nil), base.Providers...),
+		Providers:  routes,
 		MaxResults: initialRecallMaxResults,
 		Thresholds: RecallThresholdConfig{
 			MinRelevance: initialRecallMinRelevance,

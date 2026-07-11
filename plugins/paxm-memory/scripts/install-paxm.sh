@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repo="${PAXM_REPO:-pax-beehive/memory-adaptor}"
+repo="${PAXM_REPO:-pax-beehive/paxm}"
 url="https://github.com/${repo}/releases/latest/download/install.sh"
 export PAXM_VERSION="${PAXM_VERSION:-v0.1.14}"
 
