@@ -38,19 +38,22 @@ const (
 )
 
 type ensureZepUserFunc func(context.Context, config.ProviderConfig) (zepadapter.EnsureUserResult, error)
+type shutdownHookDaemonFunc func(string) error
 
 type Dependencies struct {
-	Version       string
-	EnsureZepUser ensureZepUserFunc
+	Version            string
+	EnsureZepUser      ensureZepUserFunc
+	ShutdownHookDaemon shutdownHookDaemonFunc
 }
 
 type runner struct {
-	stdin         io.Reader
-	stdout        io.Writer
-	stderr        io.Writer
-	configPath    string
-	version       string
-	ensureZepUser ensureZepUserFunc
+	stdin              io.Reader
+	stdout             io.Writer
+	stderr             io.Writer
+	configPath         string
+	version            string
+	ensureZepUser      ensureZepUserFunc
+	shutdownHookDaemon shutdownHookDaemonFunc
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -74,12 +77,13 @@ func MainWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 	deps = deps.withDefaults()
 	r := runner{
-		stdin:         stdin,
-		stdout:        stdout,
-		stderr:        stderr,
-		configPath:    configPath,
-		version:       deps.Version,
-		ensureZepUser: deps.EnsureZepUser,
+		stdin:              stdin,
+		stdout:             stdout,
+		stderr:             stderr,
+		configPath:         configPath,
+		version:            deps.Version,
+		ensureZepUser:      deps.EnsureZepUser,
+		shutdownHookDaemon: deps.ShutdownHookDaemon,
 	}
 	if len(args) == 0 {
 		r.printHelp()
@@ -107,6 +111,11 @@ func (deps Dependencies) withDefaults() Dependencies {
 	if deps.EnsureZepUser == nil {
 		deps.EnsureZepUser = zepadapter.EnsureUser
 	}
+	if deps.ShutdownHookDaemon == nil {
+		deps.ShutdownHookDaemon = func(configPath string) error {
+			return flushExistingHookBuffer(configPath, true)
+		}
+	}
 	return deps
 }
 
@@ -122,6 +131,15 @@ func (r runner) ensureZepUserFunc() ensureZepUserFunc {
 		return r.ensureZepUser
 	}
 	return zepadapter.EnsureUser
+}
+
+func (r runner) shutdownHookDaemonFunc() shutdownHookDaemonFunc {
+	if r.shutdownHookDaemon != nil {
+		return r.shutdownHookDaemon
+	}
+	return func(configPath string) error {
+		return flushExistingHookBuffer(configPath, true)
+	}
 }
 
 func (r runner) run(args []string) error {
@@ -1016,7 +1034,7 @@ func handleCaptureQueueConn(ctx context.Context, service *facade.Service, queue 
 	}
 	if request.Action == "flush" || request.Action == "shutdown" {
 		sealed, err := queue.SealAll(ctx)
-		if err == nil {
+		if err == nil && request.Action == "flush" {
 			_, err = queue.RunOnce(ctx)
 		}
 		if err != nil {
@@ -1182,11 +1200,33 @@ func newHookEventID() string {
 }
 
 func flushExistingHookBuffer(configPath string, shutdown bool) error {
-	conn, err := net.DialTimeout("unix", hookSocketPath(configPath), 250*time.Millisecond)
+	socketPath := hookSocketPath(configPath)
+	if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
+		lockPath := hookDaemonLockPath(configPath)
+		if pathDoesNotExist(lockPath) {
+			return nil
+		}
+		deadline := time.Now().Add(time.Second)
+		for pathDoesNotExist(socketPath) {
+			if pathDoesNotExist(lockPath) {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return errors.New("hook daemon lock exists but socket did not become ready")
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	} else if err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("unix", socketPath, 250*time.Millisecond)
 	if err != nil {
-		return nil
+		return err
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(35 * time.Second)); err != nil {
+		return err
+	}
 	action := "flush"
 	if shutdown {
 		action = "shutdown"
@@ -1201,7 +1241,30 @@ func flushExistingHookBuffer(configPath string, shutdown bool) error {
 	if !response.OK {
 		return errors.New(firstNonEmpty(response.Error, "hook buffer flush failed"))
 	}
+	if shutdown {
+		return waitForHookDaemonStop(configPath, 5*time.Second)
+	}
 	return nil
+}
+
+func waitForHookDaemonStop(configPath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		socketGone := pathDoesNotExist(hookSocketPath(configPath))
+		lockGone := pathDoesNotExist(hookDaemonLockPath(configPath))
+		if socketGone && lockGone {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("hook daemon did not stop before timeout")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func pathDoesNotExist(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func decodeHookEvent(raw []byte, target, eventName string) (facade.HookEvent, error) {

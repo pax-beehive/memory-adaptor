@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,4 +108,157 @@ func TestCaptureQueueHookAcknowledgesDurableTerminalWithoutWaitingForProvider(t 
 		t.Fatalf("terminal was not durably queued: %#v", stats)
 	}
 	close(releaseProvider)
+}
+
+func TestCaptureQueueShutdownSealsWithoutWaitingForProvider(t *testing.T) {
+	queue, err := capturequeue.Open(filepath.Join(t.TempDir(), "capture.sqlite"), capturequeue.Options{
+		Providers: func(string) []string { return []string{"slow"} },
+		Deliver: func(context.Context, string, capturequeue.Episode) (string, error) {
+			t.Fatal("shutdown attempted provider delivery")
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	if _, err := queue.Append(context.Background(), capturequeue.Event{
+		SessionKey: "session-a",
+		Item:       facade.IngestInput{Text: "durable before update"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server, client := net.Pipe()
+	done := make(chan struct {
+		flushed  int
+		shutdown bool
+		err      error
+	}, 1)
+	go func() {
+		flushed, shutdown, err := handleCaptureQueueConn(context.Background(), nil, queue, server, func() {}, func() {})
+		done <- struct {
+			flushed  int
+			shutdown bool
+			err      error
+		}{flushed, shutdown, err}
+	}()
+	if err := json.NewEncoder(client).Encode(hookBufferRequest{Action: "shutdown"}); err != nil {
+		t.Fatal(err)
+	}
+	var response hookBufferResponse
+	if err := json.NewDecoder(client).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
+	result := <-done
+	if result.err != nil || !result.shutdown || result.flushed != 1 || !response.OK {
+		t.Fatalf("unexpected shutdown result: result=%#v response=%#v", result, response)
+	}
+	stats, err := queue.Stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PendingDeliveries != 1 {
+		t.Fatalf("sealed episode was not retained for the next daemon: %#v", stats)
+	}
+}
+
+func TestCaptureDeliveryWorkerCloseIsBoundedByBlockedProvider(t *testing.T) {
+	started := make(chan struct{})
+	blocked := make(chan struct{})
+	queue, err := capturequeue.Open(filepath.Join(t.TempDir(), "capture.sqlite"), capturequeue.Options{
+		Providers: func(string) []string { return []string{"blocked"} },
+		Deliver: func(context.Context, string, capturequeue.Episode) (string, error) {
+			close(started)
+			<-blocked
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Append(context.Background(), capturequeue.Event{
+		SessionKey: "session-a",
+		Terminal:   true,
+		Item:       facade.IngestInput{Text: "pending"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	worker := newCaptureDeliveryWorker(queue)
+	worker.Notify()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not start")
+	}
+	startedAt := time.Now()
+	worker.Close()
+	if elapsed := time.Since(startedAt); elapsed > 1500*time.Millisecond {
+		t.Fatalf("worker shutdown remained blocked for %s", elapsed)
+	}
+	close(blocked)
+	select {
+	case <-worker.done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not finish after provider release")
+	}
+	if err := queue.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForHookDaemonStopWaitsForSocketAndLock(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	paths := []string{hookSocketPath(configPath), hookDaemonLockPath(configPath)}
+	for _, path := range paths {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("present"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		_ = os.Remove(paths[0])
+		time.Sleep(40 * time.Millisecond)
+		_ = os.Remove(paths[1])
+	}()
+	if err := waitForHookDaemonStop(configPath, time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFlushExistingHookBufferReportsStaleSocket(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	socketPath := hookSocketPath(configPath)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(socketPath, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := flushExistingHookBuffer(configPath, true); err == nil {
+		t.Fatal("stale daemon socket was silently ignored")
+	}
+}
+
+func TestFlushExistingHookBufferReportsLockWithoutReadySocket(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	lockPath := hookDaemonLockPath(configPath)
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now()
+	err := flushExistingHookBuffer(configPath, true)
+	if err == nil || !strings.Contains(err.Error(), "socket did not become ready") {
+		t.Fatalf("unexpected lock-only result: %v", err)
+	}
+	if time.Since(startedAt) < time.Second {
+		t.Fatal("did not wait for daemon startup window")
+	}
 }

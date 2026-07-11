@@ -20,14 +20,17 @@ type captureDeliveryWorker struct {
 	notify chan struct{}
 	stop   chan struct{}
 	done   chan struct{}
+	cancel context.CancelFunc
 }
 
 func newCaptureDeliveryWorker(queue *capturequeue.Queue) *captureDeliveryWorker {
+	ctx, cancel := context.WithCancel(context.Background())
 	worker := &captureDeliveryWorker{
 		queue:  queue,
 		notify: make(chan struct{}, 1),
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
+		cancel: cancel,
 	}
 	go func() {
 		defer close(worker.done)
@@ -36,10 +39,10 @@ func newCaptureDeliveryWorker(queue *capturequeue.Queue) *captureDeliveryWorker 
 		for {
 			select {
 			case <-worker.notify:
-				_, _ = worker.queue.RunOnce(context.Background())
+				_, _ = worker.queue.RunOnce(ctx)
 			case <-ticker.C:
-				_, _ = worker.queue.SealExpired(context.Background())
-				_, _ = worker.queue.RunOnce(context.Background())
+				_, _ = worker.queue.SealExpired(ctx)
+				_, _ = worker.queue.RunOnce(ctx)
 			case <-worker.stop:
 				return
 			}
@@ -56,8 +59,12 @@ func (w *captureDeliveryWorker) Notify() {
 }
 
 func (w *captureDeliveryWorker) Close() {
+	w.cancel()
 	close(w.stop)
-	<-w.done
+	select {
+	case <-w.done:
+	case <-time.After(time.Second):
+	}
 }
 
 func hookQueuePath(configPath string) string {
@@ -65,7 +72,7 @@ func hookQueuePath(configPath string) string {
 }
 
 func acquireHookDaemonLock(configPath string) (func(), error) {
-	lockPath := filepath.Join(filepath.Dir(config.ExpandPath(configPath)), "hooks", "paxm-hook.lock")
+	lockPath := hookDaemonLockPath(configPath)
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, err
 	}
@@ -97,4 +104,8 @@ func acquireHookDaemonLock(configPath string) (func(), error) {
 		}
 	}
 	return nil, errors.New("could not acquire paxm hook daemon lock")
+}
+
+func hookDaemonLockPath(configPath string) string {
+	return filepath.Join(filepath.Dir(config.ExpandPath(configPath)), "hooks", "paxm-hook.lock")
 }

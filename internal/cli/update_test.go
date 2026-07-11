@@ -5,8 +5,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +20,7 @@ import (
 	"testing"
 )
 
-func TestCLIUpdateInstallsReleaseAsset(t *testing.T) {
+func TestUpdaterInPlaceInstallStopsDaemonAfterReplacement(t *testing.T) {
 	t.Parallel()
 
 	tag := "v9.9.9"
@@ -46,15 +48,19 @@ func TestCLIUpdateInstallsReleaseAsset(t *testing.T) {
 	installPath := filepath.Join(t.TempDir(), "paxm")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Main([]string{
-		"update",
-		"--version", tag,
-		"--repo", defaultUpdateRepo,
-		"--base-url", server.URL,
-		"--install-path", installPath,
-	}, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("update failed with code %d: %s", code, stderr.String())
+	shutdownCalls := 0
+	shutdownSawInstalledBinary := false
+	updater := newUpdater(updateOptions{version: tag, repo: defaultUpdateRepo, baseURL: server.URL, installPath: installPath}, &stdout, "dev")
+	updater.stderr = &stderr
+	updater.reloadDaemon = true
+	updater.afterInstall = func() error {
+		shutdownCalls++
+		installed, _ := os.ReadFile(installPath)
+		shutdownSawInstalledBinary = string(installed) == string(binaryContent)
+		return errors.New("daemon unavailable")
+	}
+	if err := updater.Run(context.Background()); err != nil {
+		t.Fatalf("update failed: %v", err)
 	}
 	installed, err := os.ReadFile(installPath)
 	if err != nil {
@@ -65,6 +71,26 @@ func TestCLIUpdateInstallsReleaseAsset(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "updated paxm: dev -> "+tag) {
 		t.Fatalf("unexpected update output: %s", stdout.String())
+	}
+	if shutdownCalls != 1 {
+		t.Fatalf("hook daemon shutdown calls=%d, want 1", shutdownCalls)
+	}
+	if !shutdownSawInstalledBinary {
+		t.Fatal("hook daemon was stopped before the replacement binary was installed")
+	}
+	if !strings.Contains(stderr.String(), "warning: updated paxm but could not stop the existing hook daemon") {
+		t.Fatalf("missing non-fatal daemon warning: %s", stderr.String())
+	}
+
+	alternateCalls := 0
+	alternate := newUpdater(updateOptions{version: tag, repo: defaultUpdateRepo, baseURL: server.URL, installPath: filepath.Join(t.TempDir(), "alternate-paxm")}, io.Discard, "dev")
+	alternate.reloadDaemon = false
+	alternate.afterInstall = func() error { alternateCalls++; return nil }
+	if err := alternate.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if alternateCalls != 0 {
+		t.Fatalf("alternate-path install stopped current daemon %d times", alternateCalls)
 	}
 }
 
@@ -81,17 +107,24 @@ func TestCLIUpdateCheckUsesLatestRelease(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Main([]string{
+	shutdownCalls := 0
+	code := MainWithDependencies([]string{
 		"update",
 		"--check",
 		"--repo", defaultUpdateRepo,
 		"--api-base-url", server.URL,
-	}, nil, &stdout, &stderr)
+	}, nil, &stdout, &stderr, Dependencies{ShutdownHookDaemon: func(string) error {
+		shutdownCalls++
+		return nil
+	}})
 	if code != 0 {
 		t.Fatalf("update check failed with code %d: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "update available: dev -> v9.9.9") {
 		t.Fatalf("unexpected check output: %s", stdout.String())
+	}
+	if shutdownCalls != 0 {
+		t.Fatalf("update check stopped hook daemon %d times", shutdownCalls)
 	}
 }
 

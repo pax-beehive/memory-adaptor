@@ -427,9 +427,15 @@ The updater:
 - downloads the archive and `SHA256SUMS`;
 - verifies the archive checksum before extraction;
 - extracts the `paxm` binary and replaces the current executable, or
-  `--install-path` when provided.
+  `--install-path` when provided;
+- after a successful in-place install, asks the existing hook daemon to seal
+  pending capture state durably, then shut down. The updater waits for both the
+  socket and daemon lock to disappear; the next real hook starts the new binary
+  and resumes delivery. A shutdown failure is reported as a warning and does not
+  roll back a successfully installed executable.
 
 The updater intentionally does not modify paxm config, Codex hooks, local memory
-files, or telemetry files. It only replaces the binary. On Windows, replacing a
-running executable is not supported; users should pass `--install-path` and move
-the binary after the process exits.
+files, or telemetry files. `--check` never touches the daemon. On Windows,
+replacing a running executable is not supported; users should pass
+`--install-path` and move the binary after the process exits. Installing to an
+alternate path does not stop the daemon for the currently running executable.
