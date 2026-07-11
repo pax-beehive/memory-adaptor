@@ -43,6 +43,9 @@ const (
 	defaultTelemetryRetentionDays    = 30
 	defaultTelemetryQueryPreview     = 80
 	defaultHookWriteTemplate         = "{{ .safe_text }}"
+	defaultCaptureMaxEpisodeAge      = "1m"
+	defaultCaptureRetryMin           = "1s"
+	defaultCaptureMaxAttempts        = 10
 )
 
 type Config struct {
@@ -52,8 +55,17 @@ type Config struct {
 	WriteProfiles  map[string]WriteProfileConfig  `json:"write_profiles,omitempty" yaml:"write_profiles,omitempty"`
 	Agents         map[string]AgentConfig         `json:"agents,omitempty" yaml:"agents,omitempty"`
 	Telemetry      TelemetryConfig                `json:"telemetry,omitempty" yaml:"telemetry,omitempty"`
+	CaptureQueue   CaptureQueueConfig             `json:"capture_queue,omitempty" yaml:"capture_queue,omitempty"`
 
 	Hooks map[string]LegacyHookConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
+}
+
+type CaptureQueueConfig struct {
+	Path                string         `json:"path,omitempty" yaml:"path,omitempty"`
+	MaxEpisodeAge       string         `json:"max_episode_age,omitempty" yaml:"max_episode_age,omitempty"`
+	RetryMin            string         `json:"retry_min,omitempty" yaml:"retry_min,omitempty"`
+	MaxAttempts         int            `json:"max_attempts,omitempty" yaml:"max_attempts,omitempty"`
+	ProviderConcurrency map[string]int `json:"provider_concurrency,omitempty" yaml:"provider_concurrency,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -465,6 +477,15 @@ func DefaultConfig(configPath string) Config {
 			},
 		},
 		Telemetry: defaultTelemetryConfig(configPath),
+		CaptureQueue: CaptureQueueConfig{
+			MaxEpisodeAge: defaultCaptureMaxEpisodeAge,
+			RetryMin:      defaultCaptureRetryMin,
+			MaxAttempts:   defaultCaptureMaxAttempts,
+			ProviderConcurrency: map[string]int{
+				"sqlite":  1,
+				"default": 4,
+			},
+		},
 	}
 }
 
@@ -534,6 +555,26 @@ func Save(path string, cfg Config) error {
 }
 
 func Validate(cfg Config) error {
+	for name, value := range map[string]string{
+		"max_episode_age": cfg.CaptureQueue.MaxEpisodeAge,
+		"retry_min":       cfg.CaptureQueue.RetryMin,
+	} {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("capture_queue.%s must be a positive duration", name)
+		}
+	}
+	for provider, concurrency := range cfg.CaptureQueue.ProviderConcurrency {
+		if concurrency <= 0 {
+			return fmt.Errorf("capture_queue.provider_concurrency.%s must be positive", provider)
+		}
+	}
+	if cfg.CaptureQueue.MaxAttempts < 0 {
+		return errors.New("capture_queue.max_attempts must not be negative")
+	}
 	for name, agent := range cfg.Agents {
 		owner := strings.TrimSpace(strings.ToLower(agent.Integration.Owner))
 		if owner == "" || owner == IntegrationOwnerPaxm || owner == IntegrationOwnerCodexPlugin {
@@ -669,6 +710,27 @@ func Normalize(cfg Config) Config {
 		cfg.Agents[name] = normalizeAgent(agent)
 	}
 	cfg.Telemetry = normalizeTelemetry(cfg.Telemetry)
+	if cfg.CaptureQueue.Path != "" {
+		cfg.CaptureQueue.Path = ExpandPath(cfg.CaptureQueue.Path)
+	}
+	if cfg.CaptureQueue.MaxEpisodeAge == "" {
+		cfg.CaptureQueue.MaxEpisodeAge = defaultCaptureMaxEpisodeAge
+	}
+	if cfg.CaptureQueue.RetryMin == "" {
+		cfg.CaptureQueue.RetryMin = defaultCaptureRetryMin
+	}
+	if cfg.CaptureQueue.ProviderConcurrency == nil {
+		cfg.CaptureQueue.ProviderConcurrency = make(map[string]int)
+	}
+	if _, ok := cfg.CaptureQueue.ProviderConcurrency["sqlite"]; !ok {
+		cfg.CaptureQueue.ProviderConcurrency["sqlite"] = 1
+	}
+	if _, ok := cfg.CaptureQueue.ProviderConcurrency["default"]; !ok {
+		cfg.CaptureQueue.ProviderConcurrency["default"] = 4
+	}
+	if cfg.CaptureQueue.MaxAttempts == 0 {
+		cfg.CaptureQueue.MaxAttempts = defaultCaptureMaxAttempts
+	}
 	for name, provider := range cfg.Providers {
 		provider.Read = nil
 		provider.Write = nil

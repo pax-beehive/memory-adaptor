@@ -550,10 +550,13 @@ Hook write fields:
   `.metadata`, and `.raw_json`. Use `.raw_json` only for explicit custom debug
   capture; it is not part of the default long-term memory templates.
 - `mode`: descriptive write mode for config readability.
-- `buffer.enabled`: when true, queue this hook item in the in-memory daemon.
-- `buffer.flush`: when true, flush the current in-memory daemon buffer after
-  appending this item.
-- `buffer.flush_count`: flush after the buffer reaches this many items.
+- `buffer.enabled`: when true, append this hook item to the durable capture
+  queue.
+- `buffer.flush`: when true, seal this session's pending events as a complete
+  episode after appending this item.
+- `buffer.flush_count`: retained for configuration compatibility. The durable
+  queue no longer needs a global item-count flush; `turn_end` and
+  `capture_queue.max_episode_age` define episode boundaries.
 
 Paxm writes the rendered template output as `MemoryItem.text`. The default
 template stores semantic hook content instead of raw runtime events. Providers
@@ -565,9 +568,32 @@ storage behavior.
 For providers without native tier or TTL fields, paxm stores `paxm_tier` and
 `paxm_expires_at` metadata and filters results in the core router.
 
-The hook buffer is process memory owned by a short-lived local daemon. It is not
-durable; if the daemon exits before a flush, buffered hook write items can be
-lost.
+The hook queue is a SQLite WAL-backed log owned by a short-lived local daemon.
+It is durable across daemon restarts, partitions events by agent session, and
+acknowledges hooks after the local transaction commits. By default it is stored
+at `hooks/capture.sqlite` beside the paxm config.
+
+Top-level `capture_queue` settings control delivery behavior:
+
+```yaml
+capture_queue:
+  # Optional; defaults to <config-dir>/hooks/capture.sqlite.
+  path: ~/.config/paxm/hooks/capture.sqlite
+  # Seal a session without turn_end as an incomplete episode.
+  max_episode_age: 1m
+  # Initial retry delay; later failures use bounded exponential backoff.
+  retry_min: 1s
+  # Move a repeatedly failing delivery to dead-letter state.
+  max_attempts: 10
+  provider_concurrency:
+    sqlite: 1
+    default: 4
+```
+
+Different providers are delivered concurrently and maintain independent ACK and
+retry state. Episodes remain ordered within the same provider/session pair, so a
+later episode cannot bypass an earlier failed delivery. `hook_delivery`
+telemetry records the episode, session, provider, duration, reference, and error.
 
 After any successful daemon flush or immediate hook write, paxm schedules
 expired-memory cleanup on a single daemon worker. This is best effort and only

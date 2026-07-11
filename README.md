@@ -105,7 +105,7 @@ MCP active recall:
   paxm mcp serve  # stdio MCP server for structured agent tool calls
 
 Hook passive recall:
-  installed hook shim -> paxm __hook -> in-memory buffer daemon
+  installed hook shim -> paxm __hook -> durable capture queue -> providers
 
 Local history:
   paxm history --days 7
@@ -538,13 +538,13 @@ It also updates:
 
 The shims expect hook event JSON on stdin and call a hidden `paxm __hook`
 entrypoint. `user_input` returns recall JSON to Codex and also appends a write
-item to the in-memory hook buffer. `session_start` appends a write item.
+event to the SQLite-backed capture queue. `session_start` appends a write event.
 `turn_end` reads the current Codex transcript, includes tool calls/results that
 the agent actually saw, removes thinking/reasoning records, appends the final
-assistant response, and flushes the buffer to the configured write
-profile. The buffer lives in a short-lived local daemon and is intentionally not
-durable. Codex may still require you to review and trust the new non-managed
-hooks with `/hooks` before they run.
+assistant response, and seals that session as an episode. Hooks acknowledge
+after the local queue transaction commits; provider workers deliver and retry in
+the background. Queue state survives daemon restarts. Codex may still require
+you to review and trust the new non-managed hooks with `/hooks` before they run.
 
 For Claude Code, setup writes five shims and updates the user-level settings:
 
@@ -601,7 +601,8 @@ paxm uninstall --agent codex --yes
 ```
 
 Uninstall disables the selected agent in paxm config, removes only paxm-owned
-hook entries and shims, and best-effort flushes the hook buffer first. It does
+hook entries and shims, and best-effort seals and delivers the capture queue
+first. It does
 not delete provider configuration, SQLite or remote memory data, telemetry,
 the paxm binary, settings backups, or active recall skills installed by the
 user. Repeating the command is safe.

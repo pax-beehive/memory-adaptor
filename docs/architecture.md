@@ -210,11 +210,28 @@ The first-input decision is tracked in a bounded local state file under the paxm
 hooks directory. The state stores only recent session keys and timestamps; it
 does not store prompt text.
 
-`session_start` only appends a write item to the hook buffer.
+`session_start` appends a write event to the durable capture queue.
 
-`turn_end` appends a write item and flushes the buffer to the configured write
-profile. The buffer is owned by a short-lived local Unix-socket daemon and lives
-only in process memory. It is intentionally not durable.
+The queue is a SQLite WAL-backed event log partitioned by agent session. Hook
+callers acknowledge after the event transaction commits; they do not wait for a
+memory provider. `turn_end` seals only its own session's pending events into a
+structured episode. Events with source sequence metadata are checked for gaps,
+and every event payload plus the assembled episode carries a SHA-256 checksum.
+Sessions that never emit `turn_end` are sealed as incomplete after the configured
+maximum episode age.
+
+Each episode creates one independent delivery per write-profile provider. A
+background worker delivers different providers concurrently, preserves episode
+order within each provider/session partition, and records provider-specific ACK,
+retry, error, and reference state. SQLite defaults to one delivery worker while
+network providers default to four. A stable episode ID makes retries idempotent
+where the provider honors supplied IDs. Deliveries left in progress by a daemon
+crash return to retry state when the queue reopens.
+
+The Unix-socket daemon is single-instance per config directory. Its lock is
+acquired before stale socket cleanup, preventing simultaneous hook cold starts
+from unlinking another live daemon's socket. Queue state survives daemon and
+machine restarts in `hooks/capture.sqlite` by default.
 
 ## Historical Session Backfill
 
@@ -324,8 +341,8 @@ typed `before_agent_start` API surface, so this capture path is intentionally
 best-effort. Hook write failures are recorded by paxm telemetry when possible
 but do not block the Pi session.
 
-`paxm uninstall` reconciles the opposite boundary. It best-effort flushes the
-shared hook buffer, disables selected agents without erasing their hook choices,
+`paxm uninstall` reconciles the opposite boundary. It best-effort seals and
+delivers the durable capture queue, disables selected agents without erasing their hook choices,
 removes exact paxm command handlers from Codex or Claude configuration, removes
 Pi's paxm-owned extension directory, and deletes the selected shims. With no
 `--agent`, it also asks the daemon to shut down. Provider config, memory data,

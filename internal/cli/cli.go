@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
+	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	paxeval "github.com/pax-beehive/memory-adaptor/internal/eval"
 	"github.com/pax-beehive/memory-adaptor/internal/facade"
@@ -754,10 +757,11 @@ func writeCodexUserPromptHookOutput(w io.Writer, result facade.HookResult) error
 }
 
 type hookBufferRequest struct {
-	Action string          `json:"action,omitempty"`
-	Target string          `json:"target"`
-	Event  string          `json:"event"`
-	Raw    json.RawMessage `json:"raw"`
+	Action  string          `json:"action,omitempty"`
+	EventID string          `json:"event_id,omitempty"`
+	Target  string          `json:"target"`
+	Event   string          `json:"event"`
+	Raw     json.RawMessage `json:"raw"`
 }
 
 type hookBufferResponse struct {
@@ -860,10 +864,89 @@ func (r runner) runHookDaemon(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_, service, err := r.loadRuntime()
+	cfg, service, err := r.loadRuntime()
 	if err != nil {
 		return err
 	}
+	releaseLock, err := acquireHookDaemonLock(r.configFile())
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+	queuePath := hookQueuePath(r.configFile())
+	if strings.TrimSpace(cfg.CaptureQueue.Path) != "" {
+		queuePath = cfg.CaptureQueue.Path
+	}
+	maxEpisodeAge, _ := time.ParseDuration(cfg.CaptureQueue.MaxEpisodeAge)
+	retryMin, _ := time.ParseDuration(cfg.CaptureQueue.RetryMin)
+	queue, err := capturequeue.Open(queuePath, capturequeue.Options{
+		MaxEpisodeAge: maxEpisodeAge,
+		RetryMin:      retryMin,
+		MaxAttempts:   cfg.CaptureQueue.MaxAttempts,
+		Providers: func(profile string) []string {
+			writeProfile, ok := cfg.WriteProfiles[paxruntime.EffectiveWriteProfile(profile)]
+			if !ok {
+				return nil
+			}
+			providers := make([]string, 0, len(writeProfile.Providers))
+			for _, route := range writeProfile.Providers {
+				providers = append(providers, route.Name)
+			}
+			return providers
+		},
+		ProviderConcurrency: func(provider string) int {
+			if concurrency := cfg.CaptureQueue.ProviderConcurrency[provider]; concurrency > 0 {
+				return concurrency
+			}
+			return cfg.CaptureQueue.ProviderConcurrency["default"]
+		},
+		Deliver: func(ctx context.Context, provider string, episode capturequeue.Episode) (string, error) {
+			items := episode.IngestInputs()
+			result, err := service.IngestBatchToProvider(ctx, provider, facade.IngestBatchInput{Items: items})
+			if len(result.Refs) == 0 {
+				if err != nil {
+					return "", err
+				}
+				return "", fmt.Errorf("provider %s returned no memory reference", provider)
+			}
+			return result.Refs[0].ID, err
+		},
+		OnDelivery: func(outcome capturequeue.DeliveryOutcome) {
+			hookEvent := "delivery"
+			if outcome.Dead {
+				hookEvent = "delivery_dead"
+			}
+			event := telemetry.Event{
+				Time:       time.Now().UTC(),
+				Kind:       "hook_delivery",
+				Source:     "capture_queue",
+				Command:    "hook",
+				HookEvent:  hookEvent,
+				Success:    outcome.Err == nil,
+				DurationMS: outcome.Duration.Milliseconds(),
+				ItemCount:  1,
+				EpisodeID:  outcome.EpisodeID,
+				SessionKey: outcome.SessionKey,
+				Provider:   outcome.Provider,
+				Error:      paxruntime.TelemetryError(outcome.Err),
+			}
+			if outcome.Err != nil {
+				event.ProviderErrorDetails = []telemetry.ProviderErrorDetail{{Provider: outcome.Provider, Op: "put"}}
+			}
+			if outcome.Ref != "" {
+				event.RefCount = 1
+				event.ProviderWrites = map[string]int{outcome.Provider: 1}
+				event.ProviderRefs = map[string]int{outcome.Provider: 1}
+			}
+			r.recordTelemetry(cfg, event)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
+	worker := newCaptureDeliveryWorker(queue)
+	defer worker.Close()
 	cleanupWorker := newHookCleanupWorker(func(ctx context.Context) {
 		_, _ = service.CleanupExpired(ctx, 500)
 	})
@@ -881,7 +964,6 @@ func (r runner) runHookDaemon(args []string) error {
 		_ = os.Remove(*socket)
 	}()
 
-	var buffer []facade.IngestInput
 	deadline := time.NewTimer(*idleTimeout)
 	defer deadline.Stop()
 	for {
@@ -896,17 +978,14 @@ func (r runner) runHookDaemon(args []string) error {
 		}()
 		select {
 		case <-deadline.C:
-			if len(buffer) > 0 {
-				if _, err := service.IngestBatch(context.Background(), facade.IngestBatchInput{Items: buffer}); err == nil {
-					cleanupWorker.Schedule()
-				}
-			}
+			_, _ = queue.SealAll(context.Background())
+			_, _ = queue.RunOnce(context.Background())
 			return nil
 		case result := <-accepted:
 			if result.err != nil {
 				return result.err
 			}
-			flushed, shutdown, err := handleHookBufferConn(context.Background(), service, result.conn, &buffer, cleanupWorker.Schedule)
+			flushed, shutdown, err := handleCaptureQueueConn(context.Background(), service, queue, result.conn, worker.Notify, cleanupWorker.Schedule)
 			if err != nil {
 				fmt.Fprintf(r.stderr, "paxm hook buffer error: %s\n", err)
 			}
@@ -925,7 +1004,7 @@ func (r runner) runHookDaemon(args []string) error {
 	}
 }
 
-func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net.Conn, buffer *[]facade.IngestInput, scheduleCleanup func()) (int, bool, error) {
+func handleCaptureQueueConn(ctx context.Context, service *facade.Service, queue *capturequeue.Queue, conn net.Conn, notifyDelivery, scheduleCleanup func()) (int, bool, error) {
 	defer conn.Close()
 	var request hookBufferRequest
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
@@ -933,101 +1012,99 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 		return 0, false, err
 	}
 	if request.Action == "flush" || request.Action == "shutdown" {
-		flushed := len(*buffer)
-		if flushed > 0 {
-			result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: *buffer})
-			if err != nil {
-				_ = writeJSON(conn, hookBufferResponse{
-					OK:             false,
-					Error:          err.Error(),
-					ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-					ProviderErrors: result.ProviderErrors,
-				})
-				return 0, false, err
-			}
-			*buffer = nil
-			scheduleCleanup()
-			_ = writeJSON(conn, hookBufferResponse{
-				OK:             true,
-				Flushed:        flushed,
-				ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-				ProviderErrors: result.ProviderErrors,
-			})
-		} else {
-			_ = writeJSON(conn, hookBufferResponse{OK: true})
+		sealed, err := queue.SealAll(ctx)
+		if err == nil {
+			_, err = queue.RunOnce(ctx)
 		}
-		return flushed, request.Action == "shutdown", nil
+		if err != nil {
+			_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
+			return 0, false, err
+		}
+		scheduleCleanup()
+		_ = writeJSON(conn, hookBufferResponse{OK: true, Flushed: sealed})
+		return sealed, request.Action == "shutdown", nil
 	}
 	event, err := decodeHookEvent(request.Raw, request.Target, request.Event)
 	if err != nil {
 		_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
 		return 0, false, err
 	}
+	if request.EventID != "" {
+		if event.Metadata == nil {
+			event.Metadata = make(map[string]string)
+		}
+		event.Metadata["event_id"] = request.EventID
+	}
 	item, ok, err := service.HookWriteItem(event)
+	if err != nil || !ok {
+		response := hookBufferResponse{OK: err == nil}
+		if err != nil {
+			response.Error = err.Error()
+		}
+		_ = writeJSON(conn, response)
+		return 0, false, err
+	}
+	sessionKey := captureSessionKey(event)
+	bufferCfg := service.HookBufferConfig(event)
+	receipt, err := queue.Append(ctx, capturequeue.Event{
+		ID:         strings.TrimSpace(event.Metadata["event_id"]),
+		SessionKey: sessionKey,
+		Terminal:   bufferCfg.Flush,
+		Sequence:   hookSequence(event.Metadata, "event_sequence", "sequence"),
+		Final:      hookSequence(event.Metadata, "final_sequence"),
+		Item:       item,
+	})
 	if err != nil {
 		_ = writeJSON(conn, hookBufferResponse{OK: false, Error: err.Error()})
 		return 0, false, err
 	}
-	if !ok {
-		_ = writeJSON(conn, hookBufferResponse{OK: true})
-		return 0, false, nil
+	notifyDelivery()
+	flushed := 0
+	if bufferCfg.Flush {
+		flushed = 1
 	}
-	bufferCfg := service.HookBufferConfig(event)
-	if !bufferCfg.Enabled {
-		result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: []facade.IngestInput{item}})
-		if err != nil {
-			_ = writeJSON(conn, hookBufferResponse{
-				OK:             false,
-				Error:          err.Error(),
-				ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-				ProviderErrors: result.ProviderErrors,
-			})
-			return 0, false, err
-		}
-		_ = writeJSON(conn, hookBufferResponse{
-			OK:             true,
-			Buffered:       true,
-			Flushed:        1,
-			ProviderWrites: paxruntime.WriteProviderRoutes(service.Config(), item.Profile),
-			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-			ProviderErrors: result.ProviderErrors,
-		})
-		scheduleCleanup()
-		return 1, false, nil
-	}
-	*buffer = append(*buffer, item)
-	shouldFlush := bufferCfg.Flush || (bufferCfg.FlushCount > 0 && len(*buffer) >= bufferCfg.FlushCount)
-	if !shouldFlush {
-		_ = writeJSON(conn, hookBufferResponse{OK: true, Buffered: true})
-		return 0, false, nil
-	}
-	flushed := len(*buffer)
-	providerWrites := paxruntime.WriteProviderRoutesForItems(service.Config(), *buffer)
-	result, err := service.IngestBatch(ctx, facade.IngestBatchInput{Items: *buffer})
-	if err != nil {
-		_ = writeJSON(conn, hookBufferResponse{
-			OK:             false,
-			Error:          err.Error(),
-			ProviderWrites: providerWrites,
-			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-			ProviderErrors: result.ProviderErrors,
-		})
-		return 0, false, err
-	}
-	*buffer = nil
-	scheduleCleanup()
 	_ = writeJSON(conn, hookBufferResponse{
-		OK:             true,
-		Buffered:       true,
-		Flushed:        flushed,
-		ProviderWrites: providerWrites,
-		ProviderRefs:   telemetry.ProviderRefs(result.Refs),
-		ProviderErrors: result.ProviderErrors,
+		OK:       true,
+		Buffered: true,
+		Flushed:  flushed,
 	})
+	_ = receipt
 	return flushed, false, nil
 }
 
+func captureSessionKey(event facade.HookEvent) string {
+	target := firstNonEmpty(strings.TrimSpace(event.Target), "codex")
+	workspace := firstNonEmpty(strings.TrimSpace(event.Workspace), strings.TrimSpace(event.Metadata["cwd"]), "unknown")
+	if sessionID := strings.TrimSpace(event.Metadata["session_id"]); sessionID != "" {
+		return target + "/workspace/" + workspace + "/session/" + sessionID
+	}
+	if transcript := strings.TrimSpace(event.Metadata["transcript_path"]); transcript != "" {
+		return target + "/workspace/" + workspace + "/transcript/" + transcript
+	}
+	return target + "/workspace/" + workspace + "/event/" + firstNonEmpty(strings.TrimSpace(event.Metadata["event_id"]), newHookEventID())
+}
+
+func hookSequence(metadata map[string]string, keys ...string) *int64 {
+	for _, key := range keys {
+		value := strings.TrimSpace(metadata[key])
+		if value == "" {
+			continue
+		}
+		sequence, err := strconv.ParseInt(value, 10, 64)
+		if err == nil && sequence > 0 {
+			return &sequence
+		}
+	}
+	return nil
+}
+
 func (r runner) sendHookToBuffer(event facade.HookEvent) (hookBufferResponse, error) {
+	if event.Metadata == nil {
+		event.Metadata = make(map[string]string)
+	}
+	if strings.TrimSpace(event.Metadata["event_id"]) == "" {
+		event.Metadata["event_id"] = newHookEventID()
+	}
 	socket := hookSocketPath(r.configFile())
 	response, err := sendHookBufferRequest(socket, event)
 	if err != nil {
@@ -1078,9 +1155,10 @@ func sendHookBufferRequest(socket string, event facade.HookEvent) (hookBufferRes
 		raw = json.RawMessage(`{}`)
 	}
 	request := hookBufferRequest{
-		Target: event.Target,
-		Event:  event.Event,
-		Raw:    raw,
+		EventID: event.Metadata["event_id"],
+		Target:  event.Target,
+		Event:   event.Event,
+		Raw:     raw,
 	}
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		return hookBufferResponse{}, err
@@ -1090,6 +1168,14 @@ func sendHookBufferRequest(socket string, event facade.HookEvent) (hookBufferRes
 		return hookBufferResponse{}, err
 	}
 	return response, nil
+}
+
+func newHookEventID() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err == nil {
+		return "evt_" + hex.EncodeToString(bytes)
+	}
+	return "evt_" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
 func flushExistingHookBuffer(configPath string, shutdown bool) error {
@@ -3481,6 +3567,9 @@ func writeLogEvent(w io.Writer, event telemetry.Event) {
 		{name: "target", value: event.Target},
 		{name: "hook_event", value: event.HookEvent},
 		{name: "profile", value: event.Profile},
+		{name: "episode_id", value: event.EpisodeID},
+		{name: "session_key", value: event.SessionKey},
+		{name: "provider", value: event.Provider},
 	} {
 		if strings.TrimSpace(field.value) != "" {
 			parts = append(parts, field.name+"="+formatLogValue(field.value))

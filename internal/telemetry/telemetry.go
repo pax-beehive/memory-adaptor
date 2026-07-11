@@ -48,6 +48,9 @@ type Event struct {
 	ProviderRefs         map[string]int        `json:"provider_refs,omitempty"`
 	ProviderErrorDetails []ProviderErrorDetail `json:"provider_errors,omitempty"`
 	Error                string                `json:"error,omitempty"`
+	EpisodeID            string                `json:"episode_id,omitempty"`
+	SessionKey           string                `json:"session_key,omitempty"`
+	Provider             string                `json:"provider,omitempty"`
 }
 
 type ProviderErrorDetail struct {
@@ -844,6 +847,10 @@ func counterForEvent(event Event) Counter {
 		}
 	case "remember", "hook_write":
 		if !event.Skipped {
+			counter.Writes = 1
+		}
+	case "hook_delivery":
+		if event.Success && !event.Skipped {
 			counter.Writes = 1
 		}
 	}
