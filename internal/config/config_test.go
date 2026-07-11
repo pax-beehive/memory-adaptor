@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,13 +43,22 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if active.MaxResults != 3 {
 		t.Fatalf("default active recall should return 3 results: %#v", active)
 	}
+	if !reflect.DeepEqual(active.Tiers, []string{"stm", "ltm"}) {
+		t.Fatalf("default active recall should read STM and LTM: %#v", active)
+	}
 	passive := cfg.RecallProfiles["passive"]
 	if passive.MaxResults != 2 || passive.Thresholds.MinRelevance != 0.75 || passive.Thresholds.MinScore != 0.75 {
 		t.Fatalf("unexpected passive profile: %#v", passive)
 	}
+	if !reflect.DeepEqual(passive.Tiers, []string{"ltm"}) {
+		t.Fatalf("passive recall should read LTM only: %#v", passive)
+	}
 	initialProfile := cfg.RecallProfiles["passive_initial"]
 	if initialProfile.MaxResults != 5 || initialProfile.Thresholds.MinRelevance != 0.35 || initialProfile.Thresholds.MinScore != 0.35 {
 		t.Fatalf("unexpected initial passive profile: %#v", initialProfile)
+	}
+	if !reflect.DeepEqual(initialProfile.Tiers, []string{"ltm"}) {
+		t.Fatalf("initial passive recall should read LTM only: %#v", initialProfile)
 	}
 	hook := cfg.Agents["codex"].Hooks["user_input"].Recall
 	if hook.Profile != "passive" || hook.MaxResults != 2 {
@@ -79,8 +89,85 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if !cfg.Agents["pi"].Hooks["user_input"].Recall.Enabled {
 		t.Fatalf("pi passive recall should be available when the agent is selected: %#v", cfg.Agents["pi"])
 	}
-	if !piTurnEnd.Enabled || piTurnEnd.Profile != "default" || piTurnEnd.Mode != "turn_end" || !piTurnEnd.Buffer.Flush {
+	if !piTurnEnd.Enabled || piTurnEnd.Profile != "ltm" || piTurnEnd.Mode != "turn_end" || !piTurnEnd.Buffer.Flush {
 		t.Fatalf("pi turn_end should default to best-effort buffered write: %#v", piTurnEnd)
+	}
+	if stm := cfg.WriteProfiles["stm"]; stm.Tier != "stm" || stm.ExpiresAfter != defaultSTMExpiresAfter {
+		t.Fatalf("stm write profile should be short-term: %#v", stm)
+	}
+	if ltm := cfg.WriteProfiles["ltm"]; ltm.Tier != "ltm" || ltm.ExpiresAfter != "" {
+		t.Fatalf("ltm write profile should be long-term: %#v", ltm)
+	}
+}
+
+func TestPassiveRecallProfileBuildersCopyBaseRoutes(t *testing.T) {
+	t.Parallel()
+
+	base := RecallProfileConfig{
+		Providers: []ProviderRouteConfig{{Name: "sqlite", Required: true, Weight: 2}},
+		Ranking:   RankingConfig{RecencyBoost: 0.25},
+	}
+	passive := PassiveRecallProfileFrom(base)
+	initial := PassiveInitialRecallProfileFrom(base)
+
+	if passive.MaxResults != 2 || passive.Thresholds.MinRelevance != 0.75 || passive.Ranking.RecencyBoost != 0.25 || !reflect.DeepEqual(passive.Tiers, []string{"ltm"}) {
+		t.Fatalf("unexpected passive profile: %#v", passive)
+	}
+	if initial.MaxResults != 5 || initial.Thresholds.MinRelevance != 0.35 || initial.Ranking.RecencyBoost != 0.25 || !reflect.DeepEqual(initial.Tiers, []string{"ltm"}) {
+		t.Fatalf("unexpected initial profile: %#v", initial)
+	}
+	base.Providers[0].Name = "changed"
+	if passive.Providers[0].Name != "sqlite" || initial.Providers[0].Name != "sqlite" {
+		t.Fatalf("profile builders should copy provider routes: passive=%#v initial=%#v", passive, initial)
+	}
+}
+
+func TestProviderRouteHelpers(t *testing.T) {
+	t.Parallel()
+
+	routes := []ProviderRouteConfig{{Name: "sqlite", Required: true, Weight: 3}}
+	routes = UpsertProviderRoute(routes, "mem0", false)
+	routes = UpsertProviderRoute(routes, "sqlite", false)
+
+	required, ok := ProviderRouteRequired(routes, "sqlite")
+	if !ok || required {
+		t.Fatalf("sqlite route should exist and become best-effort: %#v", routes)
+	}
+	if routes[0].Weight != 3 {
+		t.Fatalf("upsert should preserve existing route weight: %#v", routes)
+	}
+	required, ok = ProviderRouteRequired(routes, "mem0")
+	if !ok || required || routes[1].Weight != 1 {
+		t.Fatalf("new route should default weight and requested policy: %#v", routes)
+	}
+	routes = RemoveProviderRoute(routes, "sqlite")
+	if _, ok := ProviderRouteRequired(routes, "sqlite"); ok {
+		t.Fatalf("sqlite route should be removed: %#v", routes)
+	}
+	if len(routes) != 1 || routes[0].Name != "mem0" {
+		t.Fatalf("unexpected remaining routes: %#v", routes)
+	}
+}
+
+func TestDefaultRecallHelpers(t *testing.T) {
+	t.Parallel()
+
+	defaults := RecallProfileConfig{
+		MaxResults: defaultRecallMaxResults,
+		Thresholds: DefaultRecallThresholds(),
+	}
+	if !IsDefaultRecallProfile(defaults) || !IsDefaultRecallThresholds(defaults.Thresholds) {
+		t.Fatalf("expected default recall helpers to recognize defaults: %#v", defaults)
+	}
+	defaults.MaxResults++
+	if IsDefaultRecallProfile(defaults) {
+		t.Fatalf("modified recall profile should not be treated as default: %#v", defaults)
+	}
+	if DefaultMem0BaseURL() != defaultMem0BaseURL {
+		t.Fatalf("default mem0 base URL helper changed")
+	}
+	if DefaultSTMExpiresAfter() != defaultSTMExpiresAfter {
+		t.Fatalf("default stm expiry helper changed")
 	}
 }
 

@@ -44,6 +44,8 @@ type IngestInput struct {
 	Source    string            `json:"source,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 	CreatedAt time.Time         `json:"created_at,omitempty"`
+	Tier      memory.MemoryTier `json:"tier,omitempty"`
+	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
 }
 
 type IngestResult struct {
@@ -104,21 +106,15 @@ func (s *Service) Recall(ctx context.Context, input RecallInput) (RecallResult, 
 }
 
 func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, error) {
-	text := strings.TrimSpace(input.Text)
-	if text == "" {
+	item, profile, ok := memoryItemFromIngestInput(input)
+	if !ok {
 		return IngestResult{}, errors.New("ingest text is required")
 	}
-	policy, err := s.putPolicy(input.Profile)
+	policy, err := s.putPolicy(profile)
 	if err != nil {
 		return IngestResult{}, err
 	}
-	putResult, err := s.router.PutWithPolicy(ctx, memory.MemoryItem{
-		ID:        input.ID,
-		Text:      text,
-		Source:    input.Source,
-		Metadata:  input.Metadata,
-		CreatedAt: effectiveCreatedAt(input.CreatedAt),
-	}, policy)
+	putResult, err := s.router.PutWithPolicy(ctx, item, policy)
 	result := IngestResult{
 		Refs:           putResult.Refs,
 		ProviderErrors: putResult.ProviderErrors,
@@ -129,21 +125,11 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 func (s *Service) IngestBatch(ctx context.Context, input IngestBatchInput) (IngestResult, error) {
 	grouped := make(map[string][]memory.MemoryItem)
 	for _, item := range input.Items {
-		text := strings.TrimSpace(item.Text)
-		if text == "" {
+		memoryItem, profile, ok := memoryItemFromIngestInput(item)
+		if !ok {
 			continue
 		}
-		profile := item.Profile
-		if strings.TrimSpace(profile) == "" {
-			profile = "default"
-		}
-		grouped[profile] = append(grouped[profile], memory.MemoryItem{
-			ID:        item.ID,
-			Text:      text,
-			Source:    item.Source,
-			Metadata:  item.Metadata,
-			CreatedAt: effectiveCreatedAt(item.CreatedAt),
-		})
+		grouped[profile] = append(grouped[profile], memoryItem)
 	}
 	if len(grouped) == 0 {
 		return IngestResult{}, nil
@@ -174,20 +160,41 @@ func (s *Service) IngestBatchToProvider(ctx context.Context, provider string, in
 	}
 	items := make([]memory.MemoryItem, 0, len(input.Items))
 	for _, item := range input.Items {
-		text := strings.TrimSpace(item.Text)
-		if text == "" {
+		memoryItem, _, ok := memoryItemFromIngestInput(item)
+		if !ok {
 			continue
 		}
-		items = append(items, memory.MemoryItem{
-			ID:        item.ID,
-			Text:      text,
-			Source:    item.Source,
-			Metadata:  item.Metadata,
-			CreatedAt: effectiveCreatedAt(item.CreatedAt),
-		})
+		items = append(items, memoryItem)
 	}
-	putResult, err := s.router.PutBatchWithPolicy(ctx, items, memory.PutPolicy{Providers: []memory.ProviderRoute{{Name: provider, Required: true}}})
+	putResult, err := s.router.PutBatchWithPolicy(ctx, items, memory.PutPolicy{
+		Providers: []memory.ProviderRoute{{Name: provider, Required: true}},
+		Tier:      memory.TierLTM,
+	})
 	return IngestResult{Refs: putResult.Refs, ProviderErrors: putResult.ProviderErrors}, err
+}
+
+func (s *Service) CleanupExpired(ctx context.Context, limit int) (memory.CleanupExpiredResult, error) {
+	return s.router.CleanupExpired(ctx, limit)
+}
+
+func memoryItemFromIngestInput(input IngestInput) (memory.MemoryItem, string, bool) {
+	text := strings.TrimSpace(input.Text)
+	if text == "" {
+		return memory.MemoryItem{}, "", false
+	}
+	profile := input.Profile
+	if strings.TrimSpace(profile) == "" {
+		profile = "default"
+	}
+	return memory.MemoryItem{
+		ID:        input.ID,
+		Text:      text,
+		Source:    input.Source,
+		Metadata:  input.Metadata,
+		CreatedAt: effectiveCreatedAt(input.CreatedAt),
+		Tier:      input.Tier,
+		ExpiresAt: input.ExpiresAt,
+	}, profile, true
 }
 
 func effectiveCreatedAt(value time.Time) time.Time {
@@ -328,6 +335,7 @@ func (s *Service) searchPolicy(profileName string, limitOverride int) (memory.Se
 		MinRelevance: profile.Thresholds.MinRelevance,
 		MinScore:     profile.Thresholds.MinScore,
 		RecencyBoost: profile.Ranking.RecencyBoost,
+		Tiers:        toMemoryTiers(profile.Tiers),
 	}, nil
 }
 
@@ -339,7 +347,18 @@ func (s *Service) putPolicy(profileName string) (memory.PutPolicy, error) {
 	if !ok {
 		return memory.PutPolicy{}, fmtMissingProfile("write", profileName)
 	}
-	return memory.PutPolicy{Providers: toMemoryRoutes(profile.Providers)}, nil
+	policy := memory.PutPolicy{
+		Providers: toMemoryRoutes(profile.Providers),
+		Tier:      memory.NormalizeTier(memory.MemoryTier(profile.Tier)),
+	}
+	if strings.TrimSpace(profile.ExpiresAfter) != "" {
+		expiresAfter, err := time.ParseDuration(profile.ExpiresAfter)
+		if err != nil {
+			return memory.PutPolicy{}, errors.New("write profile " + profileName + " expires_after is invalid: " + err.Error())
+		}
+		policy.ExpiresAfter = expiresAfter
+	}
+	return policy, nil
 }
 
 func (s *Service) defaultActiveRecallProfile() string {
@@ -366,6 +385,14 @@ func toMemoryRoutes(routes []config.ProviderRouteConfig) []memory.ProviderRoute 
 		memoryRoutes = append(memoryRoutes, memoryRoute)
 	}
 	return memoryRoutes
+}
+
+func toMemoryTiers(tiers []string) []memory.MemoryTier {
+	memoryTiers := make([]memory.MemoryTier, 0, len(tiers))
+	for _, tier := range tiers {
+		memoryTiers = append(memoryTiers, memory.NormalizeTier(memory.MemoryTier(tier)))
+	}
+	return memory.NormalizeTiers(memoryTiers)
 }
 
 func fmtMissingProfile(kind, name string) error {

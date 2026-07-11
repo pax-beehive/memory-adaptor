@@ -55,6 +55,21 @@ func (p *captureBatchProvider) PutBatch(_ context.Context, items []MemoryItem) (
 	}, nil
 }
 
+type cleanupProvider struct {
+	fakeProvider
+	deleted int
+	err     error
+	limits  []int
+}
+
+func (p *cleanupProvider) CleanupExpired(_ context.Context, limit int) (int, error) {
+	p.limits = append(p.limits, limit)
+	if p.err != nil {
+		return 0, p.err
+	}
+	return p.deleted, nil
+}
+
 func TestRouterSearchFansOutAndDedupes(t *testing.T) {
 	t.Parallel()
 
@@ -196,6 +211,34 @@ func TestRouterSearchAppliesProviderRouteThresholdOverrides(t *testing.T) {
 	}
 }
 
+func TestRouterSearchFiltersMemoryTiersAndExpiredHits(t *testing.T) {
+	t.Parallel()
+
+	expired := time.Now().UTC().Add(-time.Hour)
+	future := time.Now().UTC().Add(time.Hour)
+	router, err := NewRouter([]ProviderBinding{
+		{
+			Provider: fakeProvider{name: "a", hits: []MemoryHit{
+				{ID: "stm", Text: "active working note", Relevance: 1, Tier: TierSTM, ExpiresAt: &future},
+				{ID: "ltm", Text: "durable note", Relevance: 1, Metadata: map[string]string{"paxm_tier": "ltm"}},
+				{ID: "expired", Text: "old working note", Relevance: 1, Tier: TierSTM, ExpiresAt: &expired},
+			}},
+			Read: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "note"}, SearchPolicy{Tiers: []MemoryTier{TierSTM}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].ID != "stm" {
+		t.Fatalf("unexpected tier-filtered hits: %#v", result.Hits)
+	}
+}
+
 func TestRouterPutWritesToAllWritableProviders(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +257,84 @@ func TestRouterPutWritesToAllWritableProviders(t *testing.T) {
 	}
 	if len(result.Refs) != 2 {
 		t.Fatalf("expected two refs, got %d", len(result.Refs))
+	}
+}
+
+func TestRouterPutPolicyAppliesTierAndExpiry(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureBatchProvider{fakeProvider: fakeProvider{name: "writer"}}
+	router, err := NewRouter([]ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createdAt := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	_, err = router.PutBatchWithPolicy(context.Background(), []MemoryItem{{
+		Text:      "working state",
+		CreatedAt: createdAt,
+	}}, PutPolicy{Tier: TierSTM, ExpiresAfter: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.items) != 1 || provider.items[0].Tier != TierSTM {
+		t.Fatalf("tier was not applied: %#v", provider.items)
+	}
+	if provider.items[0].ExpiresAt == nil || !provider.items[0].ExpiresAt.Equal(createdAt.Add(24*time.Hour)) {
+		t.Fatalf("expiry was not applied: %#v", provider.items[0].ExpiresAt)
+	}
+}
+
+func TestRouterCleanupExpiredUsesCapableProviders(t *testing.T) {
+	t.Parallel()
+
+	sqliteProvider := &cleanupProvider{fakeProvider: fakeProvider{name: "sqlite"}, deleted: 2}
+	optionalProvider := &cleanupProvider{fakeProvider: fakeProvider{name: "optional"}, err: errors.New("cleanup down")}
+	router, err := NewRouter([]ProviderBinding{
+		{Provider: fakeProvider{name: "plain"}},
+		{Provider: sqliteProvider, Required: true},
+		{Provider: optionalProvider},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := router.CleanupExpired(context.Background(), 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 2 {
+		t.Fatalf("CleanupExpired deleted %d rows, want 2", result.Deleted)
+	}
+	if len(result.ProviderErrors) != 1 || result.ProviderErrors[0].Provider != "optional" || result.ProviderErrors[0].Op != "cleanup_expired" {
+		t.Fatalf("unexpected provider errors: %#v", result.ProviderErrors)
+	}
+	if len(sqliteProvider.limits) != 1 || sqliteProvider.limits[0] != 12 {
+		t.Fatalf("sqlite cleanup limits = %#v, want [12]", sqliteProvider.limits)
+	}
+	if len(optionalProvider.limits) != 1 || optionalProvider.limits[0] != 12 {
+		t.Fatalf("optional cleanup limits = %#v, want [12]", optionalProvider.limits)
+	}
+}
+
+func TestRouterCleanupExpiredFailsOnRequiredProviderError(t *testing.T) {
+	t.Parallel()
+
+	requiredProvider := &cleanupProvider{fakeProvider: fakeProvider{name: "sqlite"}, err: errors.New("locked")}
+	router, err := NewRouter([]ProviderBinding{{Provider: requiredProvider, Required: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := router.CleanupExpired(context.Background(), 0)
+	if err == nil || !strings.Contains(err.Error(), "sqlite: locked") {
+		t.Fatalf("CleanupExpired error = %v, want required provider error", err)
+	}
+	if len(result.ProviderErrors) != 1 || !result.ProviderErrors[0].Required {
+		t.Fatalf("unexpected provider errors: %#v", result.ProviderErrors)
+	}
+	if len(requiredProvider.limits) != 1 || requiredProvider.limits[0] != 500 {
+		t.Fatalf("default cleanup limit = %#v, want [500]", requiredProvider.limits)
 	}
 }
 

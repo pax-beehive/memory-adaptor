@@ -15,6 +15,7 @@ import (
 
 type captureProvider struct {
 	query string
+	tiers []memory.MemoryTier
 	hits  []memory.MemoryHit
 	items []memory.MemoryItem
 }
@@ -25,6 +26,7 @@ func (p *captureProvider) Name() string {
 
 func (p *captureProvider) Search(_ context.Context, query memory.SearchQuery) ([]memory.MemoryHit, error) {
 	p.query = query.Text
+	p.tiers = append([]memory.MemoryTier(nil), query.Tiers...)
 	if p.hits != nil {
 		return p.hits, nil
 	}
@@ -60,6 +62,9 @@ func TestIngestBatchToProviderPreservesHistoricalIdentityAndTime(t *testing.T) {
 	}
 	if len(provider.items) != 1 || provider.items[0].ID != "historical-turn" || !provider.items[0].CreatedAt.Equal(createdAt) {
 		t.Fatalf("historical item was not preserved: %#v", provider.items)
+	}
+	if provider.items[0].Tier != memory.TierLTM {
+		t.Fatalf("historical direct provider write should default to LTM: %#v", provider.items[0])
 	}
 }
 
@@ -146,6 +151,75 @@ func TestRecallUsesAgentActiveRecallProfile(t *testing.T) {
 	}
 	if provider.query != "active query" {
 		t.Fatalf("active recall did not hit provider, got query %q", provider.query)
+	}
+}
+
+func TestRecallProfilePassesMemoryTiers(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureProvider{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{
+		Version: 1,
+		RecallProfiles: map[string]config.RecallProfileConfig{
+			"default": {
+				Providers: []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				Tiers:     []string{"stm", "ltm"},
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"codex": {
+				Enabled:      true,
+				ActiveRecall: config.ActiveRecallConfig{Enabled: true, Profile: "default"},
+			},
+		},
+	}, router)
+
+	_, err = service.Recall(context.Background(), RecallInput{Query: "tiered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(provider.tiers, []memory.MemoryTier{memory.TierSTM, memory.TierLTM}) {
+		t.Fatalf("recall tiers were not passed to provider: %#v", provider.tiers)
+	}
+}
+
+func TestIngestWriteProfileAppliesMemoryTierAndTTL(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureProvider{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{
+		Version: 1,
+		WriteProfiles: map[string]config.WriteProfileConfig{
+			"stm": {
+				Providers:    []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				Tier:         "stm",
+				ExpiresAfter: "24h",
+			},
+		},
+	}, router)
+	createdAt := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	_, err = service.Ingest(context.Background(), IngestInput{
+		Text:      "working state",
+		Profile:   "stm",
+		CreatedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.items) != 1 || provider.items[0].Tier != memory.TierSTM {
+		t.Fatalf("write profile tier not applied: %#v", provider.items)
+	}
+	if provider.items[0].ExpiresAt == nil || !provider.items[0].ExpiresAt.Equal(createdAt.Add(24*time.Hour)) {
+		t.Fatalf("write profile expiry not applied: %#v", provider.items[0].ExpiresAt)
 	}
 }
 

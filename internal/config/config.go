@@ -13,6 +13,35 @@ import (
 
 var ErrConfigMissing = errors.New("paxm config is missing")
 
+const (
+	defaultConfigVersion       = 1
+	defaultMem0BaseURL         = "http://localhost:8888"
+	defaultJSONRPCTransport    = "stdio"
+	defaultJSONRPCTimeout      = "30s"
+	defaultProviderRouteWeight = 1
+	defaultRecallMaxResults    = 3
+	defaultRecallMinRelevance  = 0.25
+	defaultRecallMinScore      = 0.25
+	defaultSTMExpiresAfter     = "24h"
+
+	passiveRecallMaxResults   = 2
+	passiveRecallMinRelevance = 0.75
+	passiveRecallMinScore     = 0.75
+
+	initialRecallMaxResults   = 5
+	initialRecallMinRelevance = 0.35
+	initialRecallMinScore     = 0.35
+
+	defaultHookRecallMaxResults      = passiveRecallMaxResults
+	defaultHookInsertionMinScore     = 0.8
+	defaultHookInsertionMaxItems     = passiveRecallMaxResults
+	defaultHookBufferFlushCount      = 10
+	defaultTelemetryMaxEventFileSize = 1 << 20
+	defaultTelemetryMaxEventFiles    = 3
+	defaultTelemetryRetentionDays    = 30
+	defaultTelemetryQueryPreview     = 80
+)
+
 type Config struct {
 	Version        int                            `json:"version" yaml:"version"`
 	Providers      map[string]ProviderConfig      `json:"providers" yaml:"providers"`
@@ -62,6 +91,7 @@ type RecallProfileConfig struct {
 	MaxResults int                   `json:"max_results,omitempty" yaml:"max_results,omitempty"`
 	Thresholds RecallThresholdConfig `json:"thresholds,omitempty" yaml:"thresholds,omitempty"`
 	Ranking    RankingConfig         `json:"ranking,omitempty" yaml:"ranking,omitempty"`
+	Tiers      []string              `json:"tiers,omitempty" yaml:"tiers,omitempty"`
 }
 
 type RecallThresholdConfig struct {
@@ -75,7 +105,9 @@ type RankingConfig struct {
 }
 
 type WriteProfileConfig struct {
-	Providers []ProviderRouteConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
+	Providers    []ProviderRouteConfig `json:"providers,omitempty" yaml:"providers,omitempty"`
+	Tier         string                `json:"tier,omitempty" yaml:"tier,omitempty"`
+	ExpiresAfter string                `json:"expires_after,omitempty" yaml:"expires_after,omitempty"`
 }
 
 type AgentConfig struct {
@@ -201,8 +233,25 @@ func DefaultConfig(configPath string) Config {
 	if configPath != "" && configPath != DefaultConfigPath() {
 		dataPath = filepath.Join(filepath.Dir(configPath), "memory.sqlite")
 	}
+	defaultRecallProfile := RecallProfileConfig{
+		Providers: []ProviderRouteConfig{
+			{Name: "sqlite", Required: true, Weight: defaultProviderRouteWeight},
+		},
+		MaxResults: defaultRecallMaxResults,
+		Thresholds: RecallThresholdConfig{
+			MinRelevance: defaultRecallMinRelevance,
+			MinScore:     defaultRecallMinScore,
+		},
+		Ranking: RankingConfig{
+			Type: "weighted_relevance",
+		},
+		Tiers: []string{"stm", "ltm"},
+	}
+	defaultWriteRoutes := []ProviderRouteConfig{
+		{Name: "sqlite", Required: true},
+	}
 	return Config{
-		Version: 1,
+		Version: defaultConfigVersion,
 		Providers: map[string]ProviderConfig{
 			"sqlite": {
 				Type:    "sqlite",
@@ -217,62 +266,24 @@ func DefaultConfig(configPath string) Config {
 			"mem0": {
 				Type:    "mem0",
 				Enabled: false,
-				BaseURL: "http://localhost:8888",
+				BaseURL: defaultMem0BaseURL,
 			},
 			"jsonrpc": {
 				Type:      "jsonrpc",
 				Enabled:   false,
-				Transport: "stdio",
-				Timeout:   "30s",
+				Transport: defaultJSONRPCTransport,
+				Timeout:   defaultJSONRPCTimeout,
 			},
 		},
 		RecallProfiles: map[string]RecallProfileConfig{
-			"default": {
-				Providers: []ProviderRouteConfig{
-					{Name: "sqlite", Required: true, Weight: 1},
-				},
-				MaxResults: 3,
-				Thresholds: RecallThresholdConfig{
-					MinRelevance: 0.25,
-					MinScore:     0.25,
-				},
-				Ranking: RankingConfig{
-					Type: "weighted_relevance",
-				},
-			},
-			"passive": {
-				Providers: []ProviderRouteConfig{
-					{Name: "sqlite", Required: true, Weight: 1},
-				},
-				MaxResults: 2,
-				Thresholds: RecallThresholdConfig{
-					MinRelevance: 0.75,
-					MinScore:     0.75,
-				},
-				Ranking: RankingConfig{
-					Type: "weighted_relevance",
-				},
-			},
-			"passive_initial": {
-				Providers: []ProviderRouteConfig{
-					{Name: "sqlite", Required: true, Weight: 1},
-				},
-				MaxResults: 5,
-				Thresholds: RecallThresholdConfig{
-					MinRelevance: 0.35,
-					MinScore:     0.35,
-				},
-				Ranking: RankingConfig{
-					Type: "weighted_relevance",
-				},
-			},
+			"default":         defaultRecallProfile,
+			"passive":         PassiveRecallProfileFrom(defaultRecallProfile),
+			"passive_initial": PassiveInitialRecallProfileFrom(defaultRecallProfile),
 		},
 		WriteProfiles: map[string]WriteProfileConfig{
-			"default": {
-				Providers: []ProviderRouteConfig{
-					{Name: "sqlite", Required: true},
-				},
-			},
+			"default": LTMWriteProfileFrom(defaultWriteRoutes),
+			"stm":     STMWriteProfileFrom(defaultWriteRoutes),
+			"ltm":     LTMWriteProfileFrom(defaultWriteRoutes),
 		},
 		Agents: map[string]AgentConfig{
 			"claude": {
@@ -286,12 +297,12 @@ func DefaultConfig(configPath string) Config {
 					"session_start": {
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "Claude Code session started.\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "session_start",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
@@ -300,36 +311,36 @@ func DefaultConfig(configPath string) Config {
 							Enabled:       true,
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
-							MaxResults:    2,
+							MaxResults:    defaultHookRecallMaxResults,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
-								MinScore:          0.8,
-								MaxItems:          2,
+								MinScore:          defaultHookInsertionMinScore,
+								MaxItems:          defaultHookInsertionMaxItems,
 								RequireQueryTerms: true,
 							},
 							Initial: defaultInitialHookRecall(),
 						},
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "Claude Code user input:\n{{ .prompt }}\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "user_input",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
 					"turn_end": {
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "Claude Code turn ended.\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "turn_end",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
 								Flush:      true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
@@ -346,12 +357,12 @@ func DefaultConfig(configPath string) Config {
 					"session_start": {
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "Session started.\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "session_start",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
@@ -360,36 +371,36 @@ func DefaultConfig(configPath string) Config {
 							Enabled:       true,
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
-							MaxResults:    2,
+							MaxResults:    defaultHookRecallMaxResults,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
-								MinScore:          0.8,
-								MaxItems:          2,
+								MinScore:          defaultHookInsertionMinScore,
+								MaxItems:          defaultHookInsertionMaxItems,
 								RequireQueryTerms: true,
 							},
 							Initial: defaultInitialHookRecall(),
 						},
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "User input:\n{{ .prompt }}\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "user_input",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
 					"turn_end": {
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "Turn ended.\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "turn_end",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
 								Flush:      true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
@@ -408,11 +419,11 @@ func DefaultConfig(configPath string) Config {
 							Enabled:       true,
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
-							MaxResults:    2,
+							MaxResults:    defaultHookRecallMaxResults,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
-								MinScore:          0.8,
-								MaxItems:          2,
+								MinScore:          defaultHookInsertionMinScore,
+								MaxItems:          defaultHookInsertionMaxItems,
 								RequireQueryTerms: true,
 							},
 							Initial: defaultInitialHookRecall(),
@@ -421,13 +432,13 @@ func DefaultConfig(configPath string) Config {
 					"turn_end": {
 						Write: HookWriteConfig{
 							Enabled:  true,
-							Profile:  "default",
+							Profile:  "ltm",
 							Template: "Pi turn ended.\n\nEvent:\n{{ .raw_json }}",
 							Mode:     "turn_end",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
 								Flush:      true,
-								FlushCount: 10,
+								FlushCount: defaultHookBufferFlushCount,
 							},
 						},
 					},
@@ -505,7 +516,7 @@ func Exists(path string) bool {
 
 func Normalize(cfg Config) Config {
 	if cfg.Version == 0 {
-		cfg.Version = 1
+		cfg.Version = defaultConfigVersion
 	}
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]ProviderConfig)
@@ -519,12 +530,15 @@ func Normalize(cfg Config) Config {
 	for name, profile := range cfg.RecallProfiles {
 		cfg.RecallProfiles[name] = normalizeRecallProfile(profile)
 	}
+	if _, ok := cfg.RecallProfiles["passive"]; !ok {
+		cfg.RecallProfiles["passive"] = PassiveRecallProfileFrom(cfg.RecallProfiles["default"])
+	}
 	if _, ok := cfg.RecallProfiles["passive_initial"]; !ok {
 		base, ok := cfg.RecallProfiles["passive"]
 		if !ok {
 			base = cfg.RecallProfiles["default"]
 		}
-		cfg.RecallProfiles["passive_initial"] = passiveInitialRecallProfileFrom(base)
+		cfg.RecallProfiles["passive_initial"] = PassiveInitialRecallProfileFrom(base)
 	}
 	if len(cfg.WriteProfiles) == 0 {
 		cfg.WriteProfiles = map[string]WriteProfileConfig{
@@ -535,8 +549,9 @@ func Normalize(cfg Config) Config {
 		renameProviderRoutes(&cfg, "local", "sqlite")
 	}
 	for name, profile := range cfg.WriteProfiles {
-		cfg.WriteProfiles[name] = normalizeWriteProfile(profile)
+		cfg.WriteProfiles[name] = normalizeWriteProfile(name, profile)
 	}
+	ensureMemoryTierWriteProfiles(&cfg)
 	if len(cfg.Agents) == 0 {
 		cfg.Agents = legacyAgents(cfg.Hooks)
 	}
@@ -592,13 +607,13 @@ func normalizeProviderConfig(provider ProviderConfig) ProviderConfig {
 		provider.SearchScope = "episodes"
 	}
 	if provider.BaseURL == "" && provider.Type == "mem0" {
-		provider.BaseURL = "http://localhost:8888"
+		provider.BaseURL = defaultMem0BaseURL
 	}
 	if provider.Transport == "" && provider.Type == "jsonrpc" {
-		provider.Transport = "stdio"
+		provider.Transport = defaultJSONRPCTransport
 	}
 	if provider.Timeout == "" && provider.Type == "jsonrpc" {
-		provider.Timeout = "30s"
+		provider.Timeout = defaultJSONRPCTimeout
 	}
 	return provider
 }
@@ -676,35 +691,143 @@ func sqlitePathFromLegacyLocalPath(path string) string {
 
 func normalizeRecallProfile(profile RecallProfileConfig) RecallProfileConfig {
 	if profile.MaxResults == 0 {
-		profile.MaxResults = 3
+		profile.MaxResults = defaultRecallMaxResults
 	}
 	if profile.Thresholds == (RecallThresholdConfig{}) {
 		profile.Thresholds = RecallThresholdConfig{
-			MinRelevance: 0.25,
-			MinScore:     0.25,
+			MinRelevance: defaultRecallMinRelevance,
+			MinScore:     defaultRecallMinScore,
 		}
 	}
 	if profile.Ranking.Type == "" {
 		profile.Ranking.Type = "weighted_relevance"
 	}
+	profile.Tiers = normalizeTierList(profile.Tiers)
 	for i, route := range profile.Providers {
 		profile.Providers[i] = normalizeProviderRoute(route)
 	}
 	return profile
 }
 
-func normalizeWriteProfile(profile WriteProfileConfig) WriteProfileConfig {
+func normalizeWriteProfile(name string, profile WriteProfileConfig) WriteProfileConfig {
+	profile.Tier = normalizeWriteProfileTier(name, profile.Tier)
 	for i, route := range profile.Providers {
 		profile.Providers[i] = normalizeProviderRoute(route)
 	}
 	return profile
+}
+
+func ensureMemoryTierWriteProfiles(cfg *Config) {
+	base := cfg.WriteProfiles["default"]
+	if len(base.Providers) == 0 {
+		base = legacyWriteProfile(cfg.Providers)
+	}
+	if _, ok := cfg.WriteProfiles["ltm"]; !ok {
+		cfg.WriteProfiles["ltm"] = LTMWriteProfileFrom(base.Providers)
+	}
+	if _, ok := cfg.WriteProfiles["stm"]; !ok {
+		cfg.WriteProfiles["stm"] = STMWriteProfileFrom(base.Providers)
+	}
 }
 
 func normalizeProviderRoute(route ProviderRouteConfig) ProviderRouteConfig {
 	if route.Weight == 0 {
-		route.Weight = 1
+		route.Weight = defaultProviderRouteWeight
 	}
 	return route
+}
+
+func DefaultMem0BaseURL() string {
+	return defaultMem0BaseURL
+}
+
+func DefaultSTMExpiresAfter() string {
+	return defaultSTMExpiresAfter
+}
+
+func DefaultRecallThresholds() RecallThresholdConfig {
+	return RecallThresholdConfig{
+		MinRelevance: defaultRecallMinRelevance,
+		MinScore:     defaultRecallMinScore,
+	}
+}
+
+func IsDefaultRecallProfile(profile RecallProfileConfig) bool {
+	return profile.MaxResults == defaultRecallMaxResults && IsDefaultRecallThresholds(profile.Thresholds)
+}
+
+func IsDefaultRecallThresholds(thresholds RecallThresholdConfig) bool {
+	defaults := DefaultRecallThresholds()
+	return thresholds.MinRelevance == defaults.MinRelevance && thresholds.MinScore == defaults.MinScore
+}
+
+func ProviderRouteRequired(routes []ProviderRouteConfig, provider string) (bool, bool) {
+	for _, route := range routes {
+		if route.Name == provider {
+			return route.Required, true
+		}
+	}
+	return false, false
+}
+
+func UpsertProviderRoute(routes []ProviderRouteConfig, provider string, required bool) []ProviderRouteConfig {
+	for i, route := range routes {
+		if route.Name == provider {
+			route.Required = required
+			if route.Weight == 0 {
+				route.Weight = defaultProviderRouteWeight
+			}
+			routes[i] = route
+			return routes
+		}
+	}
+	return append(routes, ProviderRouteConfig{Name: provider, Required: required, Weight: defaultProviderRouteWeight})
+}
+
+func RemoveProviderRoute(routes []ProviderRouteConfig, provider string) []ProviderRouteConfig {
+	filtered := routes[:0]
+	for _, route := range routes {
+		if route.Name != provider {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered
+}
+
+func normalizeTier(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "stm":
+		return "stm"
+	default:
+		return "ltm"
+	}
+}
+
+func normalizeWriteProfileTier(name, value string) string {
+	if strings.TrimSpace(value) != "" {
+		return normalizeTier(value)
+	}
+	if strings.EqualFold(strings.TrimSpace(name), "stm") {
+		return "stm"
+	}
+	return "ltm"
+}
+
+func normalizeTierList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		tier := normalizeTier(value)
+		if _, ok := seen[tier]; ok {
+			continue
+		}
+		seen[tier] = struct{}{}
+		normalized = append(normalized, tier)
+	}
+	return normalized
 }
 
 func normalizeAgent(agent AgentConfig) AgentConfig {
@@ -773,34 +896,70 @@ func normalizeHookWrite(hook AgentHookConfig) AgentHookConfig {
 		hook.Write.Buffer.Enabled = true
 	}
 	if hook.Write.Buffer.Enabled && hook.Write.Buffer.FlushCount == 0 {
-		hook.Write.Buffer.FlushCount = 10
+		hook.Write.Buffer.FlushCount = defaultHookBufferFlushCount
 	}
 	return hook
 }
 
-func passiveInitialRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
+func PassiveRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
 	return RecallProfileConfig{
 		Providers:  append([]ProviderRouteConfig(nil), base.Providers...),
-		MaxResults: 5,
+		MaxResults: passiveRecallMaxResults,
 		Thresholds: RecallThresholdConfig{
-			MinRelevance: 0.35,
-			MinScore:     0.35,
+			MinRelevance: passiveRecallMinRelevance,
+			MinScore:     passiveRecallMinScore,
 		},
 		Ranking: RankingConfig{
 			Type:         "weighted_relevance",
 			RecencyBoost: base.Ranking.RecencyBoost,
 		},
+		Tiers: []string{"ltm"},
 	}
+}
+
+func PassiveInitialRecallProfileFrom(base RecallProfileConfig) RecallProfileConfig {
+	return RecallProfileConfig{
+		Providers:  append([]ProviderRouteConfig(nil), base.Providers...),
+		MaxResults: initialRecallMaxResults,
+		Thresholds: RecallThresholdConfig{
+			MinRelevance: initialRecallMinRelevance,
+			MinScore:     initialRecallMinScore,
+		},
+		Ranking: RankingConfig{
+			Type:         "weighted_relevance",
+			RecencyBoost: base.Ranking.RecencyBoost,
+		},
+		Tiers: []string{"ltm"},
+	}
+}
+
+func STMWriteProfileFrom(routes []ProviderRouteConfig) WriteProfileConfig {
+	return WriteProfileConfig{
+		Providers:    copyProviderRoutes(routes),
+		Tier:         "stm",
+		ExpiresAfter: defaultSTMExpiresAfter,
+	}
+}
+
+func LTMWriteProfileFrom(routes []ProviderRouteConfig) WriteProfileConfig {
+	return WriteProfileConfig{
+		Providers: copyProviderRoutes(routes),
+		Tier:      "ltm",
+	}
+}
+
+func copyProviderRoutes(routes []ProviderRouteConfig) []ProviderRouteConfig {
+	return append([]ProviderRouteConfig(nil), routes...)
 }
 
 func defaultInitialHookRecall() *HookInitialRecall {
 	return &HookInitialRecall{
 		Enabled:    true,
 		Profile:    "passive_initial",
-		MaxResults: 5,
+		MaxResults: initialRecallMaxResults,
 		Insertion: HookInsertionConfig{
-			MinScore: 0.35,
-			MaxItems: 5,
+			MinScore: initialRecallMinScore,
+			MaxItems: initialRecallMaxResults,
 		},
 	}
 }
@@ -812,10 +971,10 @@ func defaultTelemetryConfig(configPath string) TelemetryConfig {
 		Dir:               defaultTelemetryDir(configPath),
 		EventsFile:        "events.jsonl",
 		MetricsFile:       "metrics.json",
-		MaxEventFileBytes: 1 << 20,
-		MaxEventFiles:     3,
-		RetentionDays:     30,
-		QueryPreviewChars: 80,
+		MaxEventFileBytes: defaultTelemetryMaxEventFileSize,
+		MaxEventFiles:     defaultTelemetryMaxEventFiles,
+		RetentionDays:     defaultTelemetryRetentionDays,
+		QueryPreviewChars: defaultTelemetryQueryPreview,
 	}
 }
 
@@ -838,16 +997,16 @@ func normalizeTelemetry(telemetry TelemetryConfig) TelemetryConfig {
 		telemetry.MetricsFile = "metrics.json"
 	}
 	if telemetry.MaxEventFileBytes == 0 {
-		telemetry.MaxEventFileBytes = 1 << 20
+		telemetry.MaxEventFileBytes = defaultTelemetryMaxEventFileSize
 	}
 	if telemetry.MaxEventFiles == 0 {
-		telemetry.MaxEventFiles = 3
+		telemetry.MaxEventFiles = defaultTelemetryMaxEventFiles
 	}
 	if telemetry.RetentionDays == 0 {
-		telemetry.RetentionDays = 30
+		telemetry.RetentionDays = defaultTelemetryRetentionDays
 	}
 	if telemetry.QueryPreviewChars == 0 {
-		telemetry.QueryPreviewChars = 80
+		telemetry.QueryPreviewChars = defaultTelemetryQueryPreview
 	}
 	if telemetry.Dir != "" {
 		telemetry.Dir = ExpandPath(telemetry.Dir)
@@ -869,10 +1028,10 @@ func legacyRecallProfile(providers map[string]ProviderConfig) RecallProfileConfi
 	}
 	return normalizeRecallProfile(RecallProfileConfig{
 		Providers:  routes,
-		MaxResults: 3,
+		MaxResults: defaultRecallMaxResults,
 		Thresholds: RecallThresholdConfig{
-			MinRelevance: 0.25,
-			MinScore:     0.25,
+			MinRelevance: defaultRecallMinRelevance,
+			MinScore:     defaultRecallMinScore,
 		},
 		Ranking: RankingConfig{Type: "weighted_relevance"},
 	})
@@ -890,7 +1049,7 @@ func legacyWriteProfile(providers map[string]ProviderConfig) WriteProfileConfig 
 			Weight:   legacyWeight(provider.Weight),
 		})
 	}
-	return normalizeWriteProfile(WriteProfileConfig{Providers: routes})
+	return normalizeWriteProfile("default", WriteProfileConfig{Providers: routes})
 }
 
 func legacyAgents(hooks map[string]LegacyHookConfig) map[string]AgentConfig {
@@ -929,7 +1088,7 @@ func legacyBool(value *bool, defaultValue bool) bool {
 
 func legacyWeight(weight float64) float64 {
 	if weight == 0 {
-		return 1
+		return defaultProviderRouteWeight
 	}
 	return weight
 }

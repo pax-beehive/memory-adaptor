@@ -13,8 +13,6 @@ import (
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 )
 
-var supportedPassiveAgents = []string{"codex", "claude", "pi"}
-
 func (r runner) runUninstall(args []string) error {
 	flags := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	flags.SetOutput(r.stderr)
@@ -109,14 +107,25 @@ func removeSharedHookState(configPath string) error {
 func uninstallTargets(agentName string) ([]string, error) {
 	name := normalizeAgentName(agentName)
 	if name == "" {
-		return append([]string(nil), supportedPassiveAgents...), nil
+		return supportedPassiveAgents(), nil
 	}
-	for _, supported := range supportedPassiveAgents {
-		if name == supported {
-			return []string{name}, nil
-		}
+	if isSupportedPassiveAgent(name) {
+		return []string{name}, nil
 	}
 	return nil, fmt.Errorf("unsupported agent %q; expected codex, claude, or pi", agentName)
+}
+
+func supportedPassiveAgents() []string {
+	return []string{"codex", "claude", "pi"}
+}
+
+func isSupportedPassiveAgent(name string) bool {
+	switch name {
+	case "codex", "claude", "pi":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeAgentName(name string) string {

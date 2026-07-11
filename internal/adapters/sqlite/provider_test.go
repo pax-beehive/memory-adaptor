@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
@@ -49,8 +50,126 @@ func TestProviderPutAndSearch(t *testing.T) {
 	if hit.Source != "test" || hit.Metadata["agent"] != "codex" {
 		t.Fatalf("metadata/source did not round trip: %#v", hit)
 	}
+	if hit.Tier != memory.TierLTM {
+		t.Fatalf("default sqlite tier should be LTM: %#v", hit)
+	}
 	if hit.RawScore == nil || hit.RawScoreKind != "sqlite_fts_bm25_negated" {
 		t.Fatalf("expected sqlite raw score, got %#v", hit)
+	}
+}
+
+func TestProviderSearchFiltersTierAndExpiry(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().UTC().Add(-time.Hour)
+	future := time.Now().UTC().Add(time.Hour)
+	items := []memory.MemoryItem{
+		{Text: "shared tier memory stm", Tier: memory.TierSTM, ExpiresAt: &future},
+		{Text: "shared tier memory ltm", Tier: memory.TierLTM},
+		{Text: "shared tier memory expired", Tier: memory.TierSTM, ExpiresAt: &expired},
+	}
+	for _, item := range items {
+		if _, err := provider.Put(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{
+		Text:  "shared tier memory",
+		Tiers: []memory.MemoryTier{memory.TierSTM},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Tier != memory.TierSTM || !strings.Contains(hits[0].Text, "stm") {
+		t.Fatalf("unexpected STM hits: %#v", hits)
+	}
+
+	hits, err = provider.Search(context.Background(), memory.SearchQuery{
+		Text:  "shared tier memory",
+		Tiers: []memory.MemoryTier{memory.TierLTM},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Tier != memory.TierLTM {
+		t.Fatalf("unexpected LTM hits: %#v", hits)
+	}
+}
+
+func TestProviderCleanupExpiredDeletesRows(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().UTC().Add(-time.Hour)
+	future := time.Now().UTC().Add(time.Hour)
+	items := []memory.MemoryItem{
+		{Text: "cleanup expired marker", Tier: memory.TierSTM, ExpiresAt: &expired},
+		{Text: "cleanup future marker", Tier: memory.TierSTM, ExpiresAt: &future},
+		{Text: "cleanup durable marker", Tier: memory.TierLTM},
+	}
+	for _, item := range items {
+		if _, err := provider.Put(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deleted, err := provider.CleanupExpired(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("CleanupExpired deleted %d rows, want 1", deleted)
+	}
+
+	db, err := provider.open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var rows int
+	if err := db.QueryRowContext(context.Background(), "SELECT count(*) FROM memories WHERE text = ?", "cleanup expired marker").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("expired row still exists: %d", rows)
+	}
+	var ftsRows int
+	if err := db.QueryRowContext(context.Background(), "SELECT count(*) FROM memory_fts WHERE memory_fts MATCH ?", "expired").Scan(&ftsRows); err != nil {
+		t.Fatal(err)
+	}
+	if ftsRows != 0 {
+		t.Fatalf("expired FTS row still exists: %d", ftsRows)
+	}
+
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{
+		Text:  "cleanup",
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := make(map[string]bool, len(hits))
+	for _, hit := range hits {
+		texts[hit.Text] = true
+	}
+	if texts["cleanup expired marker"] || !texts["cleanup future marker"] || !texts["cleanup durable marker"] {
+		t.Fatalf("unexpected cleanup search hits: %#v", hits)
+	}
+
+	deleted, err = provider.CleanupExpired(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Fatalf("second CleanupExpired deleted %d rows, want 0", deleted)
 	}
 }
 

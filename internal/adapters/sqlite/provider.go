@@ -51,7 +51,7 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 
 	terms := normalizeTerms(query.Text)
 	if len(terms) == 0 {
-		return p.searchRecent(ctx, db, query.Limit)
+		return p.searchRecent(ctx, db, query)
 	}
 	return p.searchFTS(ctx, db, query, terms)
 }
@@ -110,15 +110,22 @@ func (p *Provider) PutBatch(ctx context.Context, items []memory.MemoryItem) ([]m
 		if err != nil {
 			return refs, err
 		}
+		tier := memory.NormalizeTier(item.Tier)
+		expiresAt := ""
+		if item.ExpiresAt != nil {
+			expiresAt = item.ExpiresAt.UTC().Format(time.RFC3339Nano)
+		}
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO memories(id, text, source, metadata_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-  text = excluded.text,
-  source = excluded.source,
-  metadata_json = excluded.metadata_json,
-  updated_at = excluded.updated_at
-`, item.ID, item.Text, item.Source, metadata, item.CreatedAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	INSERT INTO memories(id, text, source, metadata_json, created_at, updated_at, tier, expires_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+	  text = excluded.text,
+	  source = excluded.source,
+	  metadata_json = excluded.metadata_json,
+	  updated_at = excluded.updated_at,
+	  tier = excluded.tier,
+	  expires_at = excluded.expires_at
+	`, item.ID, item.Text, item.Source, metadata, item.CreatedAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), tier, expiresAt)
 		if err != nil {
 			return refs, err
 		}
@@ -140,6 +147,35 @@ func (p *Provider) Health(ctx context.Context) error {
 		return err
 	}
 	return db.Close()
+}
+
+func (p *Provider) CleanupExpired(ctx context.Context, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	db, err := p.open(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	result, err := db.ExecContext(ctx, `
+	DELETE FROM memories
+	WHERE rowid IN (
+	  SELECT rowid
+	  FROM memories
+	  WHERE expires_at != '' AND expires_at <= ?
+	  ORDER BY expires_at ASC
+	  LIMIT ?
+	)
+	`, time.Now().UTC().Format(time.RFC3339Nano), cleanupLimit(limit))
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(deleted), nil
 }
 
 func (p *Provider) open(ctx context.Context) (*sql.DB, error) {
@@ -182,11 +218,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
   rowid INTEGER PRIMARY KEY,
   id TEXT NOT NULL UNIQUE,
   text TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT '',
-  metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)`,
+	  source TEXT NOT NULL DEFAULT '',
+	  metadata_json TEXT NOT NULL DEFAULT '{}',
+	  created_at TEXT NOT NULL,
+	  updated_at TEXT NOT NULL,
+	  tier TEXT NOT NULL DEFAULT 'ltm',
+	  expires_at TEXT NOT NULL DEFAULT ''
+	)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   text,
   source,
@@ -210,16 +248,51 @@ END`,
 			return err
 		}
 	}
+	if err := ensureColumn(ctx, db, "tier", "TEXT NOT NULL DEFAULT 'ltm'"); err != nil {
+		return err
+	}
+	if err := ensureColumn(ctx, db, "expires_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (p *Provider) searchRecent(ctx context.Context, db *sql.DB, limit int) ([]memory.MemoryHit, error) {
+func ensureColumn(ctx context.Context, db *sql.DB, name, definition string) error {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(memories)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if columnName == name {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, "ALTER TABLE memories ADD COLUMN "+name+" "+definition)
+	return err
+}
+
+func (p *Provider) searchRecent(ctx context.Context, db *sql.DB, query memory.SearchQuery) ([]memory.MemoryHit, error) {
+	filterSQL, filterArgs := searchFilterClause(query, "m")
+	args := append(filterArgs, providerLimit(query.Limit))
 	rows, err := db.QueryContext(ctx, `
-SELECT id, text, source, metadata_json, created_at
-FROM memories
-ORDER BY created_at DESC
-LIMIT ?
-`, providerLimit(limit))
+	SELECT m.id, m.text, m.source, m.metadata_json, m.created_at, m.tier, m.expires_at
+	FROM memories AS m
+	WHERE `+filterSQL+`
+		ORDER BY m.created_at DESC
+	LIMIT ?
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,14 +315,17 @@ LIMIT ?
 }
 
 func (p *Provider) searchFTS(ctx context.Context, db *sql.DB, query memory.SearchQuery, terms []string) ([]memory.MemoryHit, error) {
+	filterSQL, filterArgs := searchFilterClause(query, "m")
+	args := append([]any{ftsMatchQuery(terms)}, filterArgs...)
+	args = append(args, candidateLimit(query.Limit))
 	rows, err := db.QueryContext(ctx, `
-SELECT m.id, m.text, m.source, m.metadata_json, m.created_at, bm25(memory_fts) AS rank
-FROM memory_fts
-JOIN memories AS m ON m.rowid = memory_fts.rowid
-WHERE memory_fts MATCH ?
-ORDER BY rank ASC, m.created_at DESC
-LIMIT ?
-`, ftsMatchQuery(terms), candidateLimit(query.Limit))
+	SELECT m.id, m.text, m.source, m.metadata_json, m.created_at, m.tier, m.expires_at, bm25(memory_fts) AS rank
+	FROM memory_fts
+	JOIN memories AS m ON m.rowid = memory_fts.rowid
+	WHERE memory_fts MATCH ? AND `+filterSQL+`
+	ORDER BY rank ASC, m.created_at DESC
+	LIMIT ?
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +381,9 @@ func scanHit(rows rowScanner, provider string, rank *sql.NullFloat64) (memory.Me
 	var hit memory.MemoryHit
 	var metadataJSON string
 	var createdAt string
-	dest := []any{&hit.ID, &hit.Text, &hit.Source, &metadataJSON, &createdAt}
+	var tier string
+	var expiresAt string
+	dest := []any{&hit.ID, &hit.Text, &hit.Source, &metadataJSON, &createdAt, &tier, &expiresAt}
 	if rank != nil {
 		dest = append(dest, rank)
 	}
@@ -323,6 +401,14 @@ func scanHit(rows rowScanner, provider string, rank *sql.NullFloat64) (memory.Me
 	hit.Provider = provider
 	hit.Metadata = metadata
 	hit.CreatedAt = created
+	hit.Tier = memory.NormalizeTier(memory.MemoryTier(tier))
+	if strings.TrimSpace(expiresAt) != "" {
+		expires, err := time.Parse(time.RFC3339Nano, expiresAt)
+		if err != nil {
+			return memory.MemoryHit{}, fmt.Errorf("sqlite memory %q expires_at: %w", hit.ID, err)
+		}
+		hit.ExpiresAt = &expires
+	}
 	return hit, nil
 }
 
@@ -346,6 +432,25 @@ func decodeMetadata(value string) (map[string]string, error) {
 		return nil, err
 	}
 	return metadata, nil
+}
+
+func searchFilterClause(query memory.SearchQuery, alias string) (string, []any) {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	clauses := []string{"(" + prefix + "expires_at = '' OR " + prefix + "expires_at > ?)"}
+	args := []any{time.Now().UTC().Format(time.RFC3339Nano)}
+	tiers := memory.NormalizeTiers(query.Tiers)
+	if len(tiers) > 0 {
+		placeholders := make([]string, 0, len(tiers))
+		for _, tier := range tiers {
+			placeholders = append(placeholders, "?")
+			args = append(args, string(tier))
+		}
+		clauses = append(clauses, prefix+"tier IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	return strings.Join(clauses, " AND "), args
 }
 
 func ftsMatchQuery(terms []string) string {
@@ -414,6 +519,13 @@ func providerLimit(limit int) int {
 		return limit
 	}
 	return 50
+}
+
+func cleanupLimit(limit int) int {
+	if limit <= 0 || limit > 500 {
+		return 500
+	}
+	return limit
 }
 
 func candidateLimit(limit int) int {

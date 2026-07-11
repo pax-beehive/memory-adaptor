@@ -105,7 +105,7 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 	}
 	request := searchRequest{
 		Query:   text,
-		Filters: p.searchFilters(query.Metadata),
+		Filters: p.searchFilters(query),
 	}
 	if query.Limit > 0 {
 		request.TopK = intPtr(clampInt(query.Limit, 1, 100))
@@ -188,15 +188,18 @@ func (p *Provider) putOne(ctx context.Context, item memory.MemoryItem) ([]memory
 	return refs, nil
 }
 
-func (p *Provider) searchFilters(metadata map[string]string) map[string]any {
+func (p *Provider) searchFilters(query memory.SearchQuery) map[string]any {
 	filters := make(map[string]any)
-	for _, key := range sortedKeys(metadata) {
+	for _, key := range sortedKeys(query.Metadata) {
 		if isReservedFilterKey(key) {
 			continue
 		}
-		if value := strings.TrimSpace(metadata[key]); value != "" {
+		if value := strings.TrimSpace(query.Metadata[key]); value != "" {
 			filters[key] = value
 		}
+	}
+	if tiers := memory.NormalizeTiers(query.Tiers); len(tiers) == 1 {
+		filters["paxm_tier"] = string(tiers[0])
 	}
 	addNonEmpty(filters, "user_id", p.userID)
 	addNonEmpty(filters, "agent_id", p.agentID)
@@ -376,6 +379,10 @@ func toMem0Metadata(item memory.MemoryItem) map[string]any {
 	metadata := make(map[string]any)
 	addNonEmpty(metadata, "paxm_id", item.ID)
 	addNonEmpty(metadata, "paxm_source", item.Source)
+	addNonEmpty(metadata, "paxm_tier", string(memory.NormalizeTier(item.Tier)))
+	if item.ExpiresAt != nil {
+		metadata["paxm_expires_at"] = item.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 	if !item.CreatedAt.IsZero() {
 		metadata["paxm_created_at"] = item.CreatedAt.UTC().Format(time.RFC3339Nano)
 	}

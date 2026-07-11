@@ -55,6 +55,7 @@ recall_profiles:
     ranking:
       type: weighted_relevance
       recency_boost: 0
+    tiers: [stm, ltm]
 
   passive:
     providers:
@@ -68,6 +69,7 @@ recall_profiles:
     ranking:
       type: weighted_relevance
       recency_boost: 0
+    tiers: [ltm]
 
   passive_initial:
     providers:
@@ -81,9 +83,22 @@ recall_profiles:
     ranking:
       type: weighted_relevance
       recency_boost: 0
+    tiers: [ltm]
 
 write_profiles:
   default:
+    tier: ltm
+    providers:
+      - name: sqlite
+        required: true
+  stm:
+    tier: stm
+    expires_after: 24h
+    providers:
+      - name: sqlite
+        required: true
+  ltm:
+    tier: ltm
     providers:
       - name: sqlite
         required: true
@@ -99,7 +114,7 @@ agents:
       session_start:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Claude Code session started.
 
@@ -130,7 +145,7 @@ agents:
               max_items: 5
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Claude Code user input:
             {{ .prompt }}
@@ -145,7 +160,7 @@ agents:
       turn_end:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Claude Code turn ended.
 
@@ -167,7 +182,7 @@ agents:
       session_start:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Session started.
 
@@ -198,7 +213,7 @@ agents:
               max_items: 5
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             User input:
             {{ .prompt }}
@@ -213,7 +228,7 @@ agents:
       turn_end:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Turn ended.
 
@@ -253,7 +268,7 @@ agents:
       turn_end:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Pi turn ended.
 
@@ -352,7 +367,8 @@ exit. Supported methods are:
 `paxm.search` receives a `SearchQuery` JSON object and returns
 `{"hits":[...]}`. `paxm.put` receives a `MemoryItem` JSON object and returns
 `{"ref":{...}}` or `{"refs":[...]}`. `paxm.putBatch` receives
-`{"items":[...]}` and returns `{"refs":[...]}`.
+`{"items":[...]}` and returns `{"refs":[...]}`. `SearchQuery` may include
+`tiers`; `MemoryItem` may include `tier` and `expires_at`.
 
 Legacy configs with a default `local` provider are loaded as a `sqlite`
 provider; a legacy `*.jsonl` path is mapped to the same basename with a
@@ -364,12 +380,14 @@ provider; a legacy `*.jsonl` path is mapped to the same basename with a
 
 The default config separates explicit and passive recall:
 
-- `default` is used by active `paxm recall` and returns 3 memories by default.
-  Use `paxm recall --limit N` to request more for a specific query.
+- `default` is used by active `paxm recall`, reads both `stm` and `ltm`, and
+  returns 3 memories by default. Use `paxm recall --limit N` to request more for
+  a specific query.
 - `passive_initial` is used only for the first `user_input` observed in a
-  session. It is looser and returns up to 5 memories for session warmup context.
+  session. It reads `ltm` only, is looser, and returns up to 5 memories for
+  session warmup context.
 - `passive` is used by later hook-based `user_input` calls and is intentionally
-  narrower, with higher thresholds and fewer results.
+  narrower, with higher thresholds, fewer results, and `ltm`-only reads.
 
 Provider route fields:
 
@@ -379,6 +397,8 @@ Provider route fields:
 - `thresholds`: optional provider-specific recall thresholds. When present,
   non-zero `min_relevance` or `min_score` values override the profile-level
   defaults for this provider route only.
+- `tiers`: optional memory tiers to search. Supported values are `stm` and
+  `ltm`; omitted means no tier filter.
 
 Threshold fields:
 
@@ -412,8 +432,14 @@ Ranking fields:
 
 ## Write Profiles
 
-`write_profiles` defines write strategy. `paxm remember` uses the `default`
-write profile unless another profile is selected.
+`write_profiles` defines write strategy. A write profile chooses provider routes,
+the memory tier assigned to each write, and an optional expiry. `ltm` is durable
+long-term memory. `stm` is short-term working memory and defaults to
+`expires_after: 24h`.
+
+`paxm remember` uses the `default` write profile unless another profile is
+selected. Agent skills should use `--profile stm` for short-lived task state and
+`--profile ltm` for durable preferences, decisions, or recurring fixes.
 
 ## Agents
 
@@ -475,7 +501,8 @@ Pi messages from the generated extension.
 Hook write fields:
 
 - `enabled`: whether this hook produces a memory write item.
-- `profile`: write profile used when the item is flushed.
+- `profile`: write profile used when the item is flushed. Built-in passive
+  hooks default to `ltm`.
 - `template`: Go template rendered from hook data. Available keys include
   `.target`, `.event`, `.prompt`, `.query`, `.workspace`, `.metadata`, and
   `.raw_json`.
@@ -491,9 +518,17 @@ SQLite stores the text directly, Zep receives it as a text episode, Mem0
 receives it as a `role=user` message and may infer memories server-side, and
 JSON-RPC plugins decide their own extraction or storage behavior.
 
+For providers without native tier or TTL fields, paxm stores `paxm_tier` and
+`paxm_expires_at` metadata and filters results in the core router.
+
 The hook buffer is process memory owned by a short-lived local daemon. It is not
 durable; if the daemon exits before a flush, buffered hook write items can be
 lost.
+
+After any successful daemon flush or immediate hook write, paxm starts a
+background expired-memory cleanup. This is best effort and only affects providers
+that implement cleanup. SQLite deletes a bounded batch of expired rows; recalls
+already filter expired items even before storage cleanup runs.
 
 ## Setup And Uninstall
 

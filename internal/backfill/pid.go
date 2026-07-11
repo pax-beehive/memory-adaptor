@@ -2,4 +2,6 @@ package backfill
 
 import "os"
 
-var processIDValue = os.Getpid()
+func processID() int {
+	return os.Getpid()
+}

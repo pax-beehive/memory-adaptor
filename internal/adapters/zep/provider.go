@@ -407,6 +407,10 @@ func toZepMetadata(item memory.MemoryItem) map[string]interface{} {
 	metadata := make(map[string]interface{})
 	addMetadata(metadata, "paxm_id", item.ID)
 	addMetadata(metadata, "paxm_source", item.Source)
+	addMetadata(metadata, "paxm_tier", string(memory.NormalizeTier(item.Tier)))
+	if item.ExpiresAt != nil {
+		addMetadata(metadata, "paxm_expires_at", item.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	}
 	keys := make([]string, 0, len(item.Metadata))
 	for key := range item.Metadata {
 		keys = append(keys, key)

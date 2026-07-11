@@ -124,7 +124,7 @@ Build locally:
 ```bash
 go build -o /tmp/paxm ./cmd/paxm
 /tmp/paxm setup
-/tmp/paxm remember --text "paxm supports hook passive recall"
+/tmp/paxm remember --profile stm --text "paxm supports hook passive recall"
 /tmp/paxm recall --query "passive recall"
 /tmp/paxm history --days 7
 ```
@@ -133,7 +133,7 @@ For a project-local config during development:
 
 ```bash
 /tmp/paxm --config /tmp/paxm-dev/config.yaml setup --force
-/tmp/paxm --config /tmp/paxm-dev/config.yaml remember --text "enabled providers can read and write"
+/tmp/paxm --config /tmp/paxm-dev/config.yaml remember --profile stm --text "enabled providers can read and write"
 printf '{"prompt":"enabled providers"}' | /tmp/paxm --config /tmp/paxm-dev/config.yaml recall --hook-event --json
 ```
 
@@ -159,7 +159,8 @@ subcommand:
 The MCP server exposes a narrow tool surface:
 
 - `paxm_recall`: active recall through configured recall profiles.
-- `paxm_remember`: durable writes through configured write profiles.
+- `paxm_remember`: writes through configured write profiles; use `stm` for
+  short-term working memory and `ltm` for durable facts.
 - `paxm_history`: recent local telemetry summary.
 - `paxm_config_doctor`: provider health checks without returning config secrets.
 
@@ -221,6 +222,7 @@ recall_profiles:
       min_score: 0.25
     ranking:
       type: weighted_relevance
+    tiers: [stm, ltm]
 
   passive:
     providers:
@@ -233,6 +235,7 @@ recall_profiles:
       min_score: 0.75
     ranking:
       type: weighted_relevance
+    tiers: [ltm]
 
   passive_initial:
     providers:
@@ -245,9 +248,22 @@ recall_profiles:
       min_score: 0.35
     ranking:
       type: weighted_relevance
+    tiers: [ltm]
 
 write_profiles:
   default:
+    tier: ltm
+    providers:
+      - name: sqlite
+        required: true
+  stm:
+    tier: stm
+    expires_after: 24h
+    providers:
+      - name: sqlite
+        required: true
+  ltm:
+    tier: ltm
     providers:
       - name: sqlite
         required: true
@@ -263,7 +279,7 @@ agents:
       session_start:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Session started.
 
@@ -294,7 +310,7 @@ agents:
               max_items: 5
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             User input:
             {{ .prompt }}
@@ -309,7 +325,7 @@ agents:
       turn_end:
         write:
           enabled: true
-          profile: default
+          profile: ltm
           template: |
             Turn ended.
 
@@ -367,10 +383,13 @@ Multiple enabled provider instances are supported by configuration. The key
 under `providers` is an instance name, not the adapter type, so configs can have
 multiple `mem0` or `jsonrpc` instances such as `mem0_personal`, `mem0_team`, and
 `corp_memory`. Recall profiles decide which provider instances are read, how
-provider relevance is weighted, and what thresholds are applied. The default
-active recall profile returns 3 memories; pass `--limit N` to `paxm recall` to
-request more for a specific query. Write profiles decide which provider
-instances are written.
+provider relevance is weighted, what thresholds are applied, and which memory
+tiers are searched. The default active recall profile reads both short-term
+memory (`stm`) and long-term memory (`ltm`) and returns 3 memories; pass
+`--limit N` to `paxm recall` to request more for a specific query. Passive
+recall profiles read `ltm` only. Write profiles decide which provider instances
+are written and whether the item is stored as `stm` or `ltm`; the default `stm`
+profile expires after 24 hours.
 Optional provider failures are returned as provider errors; required provider
 failures fail the command.
 
@@ -378,6 +397,15 @@ Hook recall uses two passive profiles by default. The first `user_input` seen
 for a session can use the looser `passive_initial` profile as session warmup
 context. Later `user_input` hooks use the stricter `passive` profile to avoid
 polluting the agent context.
+
+Passive hook writes use the `ltm` write profile by default. Active agents should
+write short-lived task state to `stm` and reserve `ltm` for durable preferences,
+decisions, and recurring fixes.
+
+Expired memory cleanup is hook-triggered and best effort. After a successful
+hook-buffer flush or immediate hook write, paxm starts a background cleanup for
+providers that support it; SQLite deletes a bounded batch of expired rows.
+Recall still filters expired items even if cleanup has not run yet.
 
 Remote provider configs may include a plain-text `api_key` field. Zep is
 supported with `type: zep` using `github.com/getzep/zep-go/v3`; configure
@@ -389,6 +417,8 @@ The Mem0 adapter sends `api_key` as `X-API-Key`, matching the OSS REST server.
 Custom plugin providers are supported with `type: jsonrpc`. V1 supports stdio
 plugins: paxm invokes the configured command with a JSON-RPC 2.0 request for
 `paxm.health`, `paxm.search`, `paxm.put`, or optional `paxm.putBatch`.
+`SearchQuery` may include `tiers`; `MemoryItem` may include `tier` and
+`expires_at`.
 
 `paxm setup` is the interactive entry point for changing provider and passive
 integration choices. TTY sessions use checkbox selectors; piped input retains
