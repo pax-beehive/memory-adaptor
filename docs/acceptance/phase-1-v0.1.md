@@ -2,7 +2,7 @@
 
 Date: 2026-07-10
 
-Result: **Blocked**
+Result: **Passed after remediation**
 
 This run exercised the public Codex distribution path and a real Codex task.
 It did not rely only on manifest validation or direct CLI unit tests.
@@ -10,21 +10,21 @@ It did not rely only on manifest validation or direct CLI unit tests.
 ## Release Pairing
 
 ```text
-paxm binary: v0.1.12
-plugin:      v0.1.0
+paxm binary: v0.1.13
+plugin:      v0.1.1
 marketplace: pax-agent-nexus
-source ref:  paxm-memory-v0.1.0
+source ref:  paxm-memory-v0.1.1
 Codex CLI:   v0.144.1
 ```
 
 ## Passed Checks
 
-- A clean temporary `CODEX_HOME` cloned the public GitHub marketplace from the
-  pinned `paxm-memory-v0.1.0` tag.
-- `codex plugin add paxm-memory@pax-agent-nexus` installed and enabled plugin
-  version `0.1.0`.
-- The bundled installer downloaded and installed the paired `paxm v0.1.12`
-  Darwin arm64 binary into an isolated directory.
+- A clean temporary `CODEX_HOME` cloned the public GitHub marketplace from a
+  pinned plugin release tag.
+- `codex plugin add paxm-memory@pax-agent-nexus` installed and enabled the
+  pinned plugin version.
+- The bundled installer downloaded and installed the paired Darwin arm64 paxm
+  binary into an isolated directory.
 - `paxm setup --integration codex-plugin --yes --force` was idempotent, recorded
   plugin ownership, and did not register a duplicate Codex hook.
 - The clean SQLite provider passed `paxm config doctor` and completed a real STM
@@ -38,7 +38,7 @@ Codex CLI:   v0.144.1
   plugin was removed, proving that plugin rollback does not remove memory or
   make the paxm runtime unusable.
 
-## Blocking Failure
+## Initial Blocking Failure
 
 The real Codex task rejected the plugin's `UserPromptSubmit` hook output:
 
@@ -72,17 +72,27 @@ so the fail-open hook could silently do no useful work until the plugin setup
 workflow upgraded the binary to `v0.1.12`. The setup skill diagnoses this, but
 the installed/enabled state alone does not prove that the runtime is compatible.
 
-## Required Fix and Re-run
+## Remediation and Re-run
 
-Before Phase 1 can pass:
+The fix keeps paxm's internal hook result available to machine-facing recall
+commands but translates internal Codex `__hook --json` output into the
+documented envelope:
 
-1. Emit documented Codex-native `UserPromptSubmit` output from the plugin hook.
-2. Add a contract test that rejects paxm's internal `HookResult` shape and
-   accepts the exact Codex hook envelope or documented plain-text path.
-3. Ensure the no-hit path emits no unnecessary model context.
-4. Repeat the real task using a new acceptance token and confirm that the model
-   receives it without calling `paxm recall` itself.
-5. Repeat plugin remove/reinstall after publishing the compatible plugin and,
-   if required, binary release pairing.
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "Relevant memory recalled by paxm: ..."
+  }
+}
+```
 
-Do not start the Phase 2 evaluation harness until this blocker is closed.
+The no-hit path now exits successfully without writing stdout. Regression tests
+cover both the native envelope and the silent no-hit behavior while preserving
+the existing raw JSON contract for `recall --hook-event --json` and non-Codex
+targets.
+
+The real Codex task was repeated with the fixed binary. Codex reported the
+`UserPromptSubmit` hook as completed, displayed the recalled hook context, and
+the model returned `plugin recall path is healthy` without calling a tool or
+running a shell command. This closes the passive-injection blocker.
