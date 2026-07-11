@@ -597,12 +597,15 @@ func writeRecallJSON(w io.Writer, result facade.RecallResult, mode string) error
 
 func (r runner) runEval(args []string) error {
 	if len(args) == 0 || args[0] != "run" {
-		return errors.New("usage: paxm eval run --suite PATH [--json]")
+		return errors.New("usage: paxm eval run --suite PATH [--json] [--compare RESULT.json] [--budget BUDGET.json] [--output RESULT.json]")
 	}
 	fs := flag.NewFlagSet("eval run", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
 	suitePath := fs.String("suite", "evals/baseline", "suite file or directory")
 	jsonOut := fs.Bool("json", false, "write JSON")
+	comparePath := fs.String("compare", "", "compare with a prior result JSON")
+	budgetPath := fs.String("budget", "", "enforce a regression budget JSON")
+	outputPath := fs.String("output", "", "write the current result JSON")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -614,10 +617,51 @@ func (r runner) runEval(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	var comparison *paxeval.Comparison
+	if *comparePath != "" {
+		baseline, loadErr := paxeval.LoadResult(*comparePath)
+		if loadErr != nil {
+			return loadErr
+		}
+		value, compareErr := paxeval.Compare(baseline, result)
+		if compareErr != nil {
+			return compareErr
+		}
+		comparison = &value
+	}
+	var budgetFailures []string
+	if *budgetPath != "" {
+		budget, loadErr := paxeval.LoadBudget(*budgetPath)
+		if loadErr != nil {
+			return loadErr
+		}
+		budgetFailures = paxeval.CheckBudget(result, budget)
+	}
+	if *outputPath != "" {
+		data, marshalErr := json.MarshalIndent(result, "", "  ")
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if writeErr := os.WriteFile(*outputPath, append(data, '\n'), 0o600); writeErr != nil {
+			return writeErr
+		}
+	}
+	if *jsonOut && (comparison != nil || *budgetPath != "") {
+		err = writeJSON(r.stdout, struct {
+			Result         paxeval.Result      `json:"result"`
+			Comparison     *paxeval.Comparison `json:"comparison,omitempty"`
+			BudgetFailures []string            `json:"budget_failures,omitempty"`
+		}{result, comparison, budgetFailures})
+	} else if *jsonOut {
 		err = writeJSON(r.stdout, result)
 	} else {
 		writeEvalReport(r.stdout, result)
+		if comparison != nil {
+			writeEvalComparison(r.stdout, *comparison)
+		}
+		for _, failure := range budgetFailures {
+			fmt.Fprintf(r.stdout, "BUDGET FAIL: %s\n", failure)
+		}
 	}
 	if err != nil {
 		return err
@@ -625,7 +669,18 @@ func (r runner) runEval(args []string) error {
 	if result.Failed > 0 {
 		return fmt.Errorf("eval failed: %d of %d cases failed", result.Failed, result.CaseCount)
 	}
+	if len(budgetFailures) > 0 {
+		return fmt.Errorf("eval regression budget failed: %d metrics outside budget", len(budgetFailures))
+	}
 	return nil
+}
+
+func writeEvalComparison(w io.Writer, comparison paxeval.Comparison) {
+	fmt.Fprintf(w, "comparison: %s -> %s\n", comparison.BaselineSuite, comparison.CurrentSuite)
+	fmt.Fprintf(w, "  passed %+d  recall@k %+.3f  precision@k %+.3f  mrr %+.3f  false-positive rate %+.3f  duration %+dms\n", comparison.PassedDelta, comparison.RecallAtKDelta, comparison.PrecisionAtKDelta, comparison.MRRDelta, comparison.FalsePositiveRateDelta, comparison.DurationMSDelta)
+	if comparison.WriteRecallDelta != 0 || comparison.WritePrecisionDelta != 0 || comparison.WriteFalsePositiveRateDelta != 0 {
+		fmt.Fprintf(w, "  write recall %+.3f  write precision %+.3f  write false-positive rate %+.3f\n", comparison.WriteRecallDelta, comparison.WritePrecisionDelta, comparison.WriteFalsePositiveRateDelta)
+	}
 }
 
 func writeEvalReport(w io.Writer, result paxeval.Result) {

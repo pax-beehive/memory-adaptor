@@ -145,15 +145,28 @@ show that installation, hook trust, upgrade, disable, and rollback are reliable.
 
 ## Phase 2: Recall Evaluation Harness
 
-Status: local retrieval and conversation-to-write baselines implemented.
+Status: deterministic contract/regression layer implemented.
 `evals/baseline/suite.json` contains 100 versioned SQLite retrieval cases, and
 `evals/conversation-write/suite.json` contains 50 cases with normalized
 conversation history and hook messages that execute production write, ingest,
 and later recall paths, including passive recall-envelope and active recall-tool
-echo suppression. `paxm eval run` emits terminal or JSON results and CI runs
-both suites. Lifecycle and
-consolidation scenarios, comparison mode, provider-level latency, regression
-budgets, and opt-in remote-provider evaluation remain follow-up slices.
+echo suppression. `evals/lifecycle/suite.json` adds 40 cases covering
+active/passive recall after runtime restart, duplicate-write consolidation, and
+recall-echo suppression. `paxm eval run` can save and compare compatible result
+files, and measured regression budgets for all three suites run in CI.
+
+These deterministic suites currently score at or near 100%. Treat them as
+contract tests: they prove production paths remain intact, but they do not yet
+discriminate between plausible ranking, admission, or consolidation strategies.
+The next Phase 2 slice is therefore a separate challenge set whose purpose is
+to expose quality differences rather than preserve a perfect score.
+
+An opt-in cross-agent tracer also exists under `evals/cross-agent`. It runs Pi
+producer sessions and fresh Claude Code control/passive/active consumers in
+audited OS sandboxes, with one SQLite database as the only shared channel. The
+initial three-scenario run showed 2/3 safe success for control and 3/3 for both
+memory-assisted arms. This is directional evidence, not a probability estimate;
+scenario expansion and repeated trials remain follow-up work.
 
 Build the evaluation harness before starting the macOS application. Its results
 will determine which policy controls and explanations the UI actually needs.
@@ -176,8 +189,24 @@ Each scenario should contain:
 Start with a 100-case deterministic SQLite baseline built from sanitized,
 versioned scenario families. Cover active recall, initial passive recall, later
 passive recall, distractor suppression, ranking, STM and LTM retrieval, result
-limits, and contextual metadata. Add lifecycle and multi-provider suites as
-separate slices once the local runner is stable.
+limits, and contextual metadata. The deterministic retrieval, write, and
+lifecycle suites now form the CI contract layer.
+
+### Challenge Set
+
+Build a separate non-gating quality suite with intentionally difficult cases:
+
+- indirect and synonymous queries that do not repeat memory wording;
+- 20-100 strong distractors, including the correct entity with a wrong value;
+- old/new conflicts across time, workspace, agent, and session boundaries;
+- shared databases that accumulate realistic long-running memory pollution;
+- negative cases where inserting no memory is the correct result;
+- near-duplicate, partial-update, and contradictory consolidation cases;
+- top-1 and top-3 ranking quality, not only whether a target appears anywhere.
+
+The initial challenge score should be recorded as a measured baseline, not
+forced to 100%. Improvements to retrieval or memory policy should raise this
+score without violating the deterministic contract suites.
 
 ### Measurements
 
@@ -209,6 +238,8 @@ profiles, providers, or code revisions.
 - Acceptable regression budgets are recorded once the first baseline is known;
   numeric targets should come from measured results rather than being invented
   in advance.
+- A versioned challenge set produces a non-saturated baseline that can
+  distinguish policy and ranking changes.
 
 ## Phase 3: Native macOS Application
 

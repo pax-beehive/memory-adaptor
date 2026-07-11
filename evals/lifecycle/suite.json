@@ -1,0 +1,1666 @@
+{
+  "version": 1,
+  "name": "memory-lifecycle-sqlite-40",
+  "cases": [
+    {
+      "id": "passive_after_restart-01",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the ember cache TTL is eleven minutes."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the ember cache TTL is eleven minutes.",
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "producer-01"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "ember cache TTL eleven minutes",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "consumer-01"
+        }
+      },
+      "expected_write": [
+        "ember cache TTL",
+        "eleven minutes"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-01",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the ember cache TTL is eleven minutes."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the ember cache TTL is eleven minutes.",
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "producer-01"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "ember cache TTL eleven minutes",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "consumer-01"
+        }
+      },
+      "expected_write": [
+        "ember cache TTL",
+        "eleven minutes"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-01",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the ember cache TTL is eleven minutes."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the ember cache TTL is eleven minutes.",
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "producer-01"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "ember cache TTL eleven minutes",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "consumer-01"
+        }
+      },
+      "expected_write": [
+        "ember cache TTL",
+        "eleven minutes"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-01",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the ember cache TTL is eleven minutes."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-ember-cache"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the ember cache TTL is eleven minutes."
+          }
+        ],
+        "workspace": "/eval/lifecycle/ember-cache",
+        "metadata": {
+          "session_id": "echo-01"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "ember cache TTL eleven minutes",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/ember-cache"
+      },
+      "expected_write": [
+        "ember cache TTL",
+        "eleven minutes"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-ember-cache",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-02",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the harbor backup window is 02:40 UTC."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the harbor backup window is 02:40 UTC.",
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "producer-02"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "harbor backup window 02:40 UTC",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "consumer-02"
+        }
+      },
+      "expected_write": [
+        "harbor backup window",
+        "02:40 UTC"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-02",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the harbor backup window is 02:40 UTC."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the harbor backup window is 02:40 UTC.",
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "producer-02"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "harbor backup window 02:40 UTC",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "consumer-02"
+        }
+      },
+      "expected_write": [
+        "harbor backup window",
+        "02:40 UTC"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-02",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the harbor backup window is 02:40 UTC."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the harbor backup window is 02:40 UTC.",
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "producer-02"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "harbor backup window 02:40 UTC",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "consumer-02"
+        }
+      },
+      "expected_write": [
+        "harbor backup window",
+        "02:40 UTC"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-02",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the harbor backup window is 02:40 UTC."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-harbor-backup"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the harbor backup window is 02:40 UTC."
+          }
+        ],
+        "workspace": "/eval/lifecycle/harbor-backup",
+        "metadata": {
+          "session_id": "echo-02"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "harbor backup window 02:40 UTC",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/harbor-backup"
+      },
+      "expected_write": [
+        "harbor backup window",
+        "02:40 UTC"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-harbor-backup",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-03",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the indigo index shards is nine shards."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the indigo index shards is nine shards.",
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "producer-03"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "indigo index shards nine shards",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "consumer-03"
+        }
+      },
+      "expected_write": [
+        "indigo index shards",
+        "nine shards"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-03",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the indigo index shards is nine shards."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the indigo index shards is nine shards.",
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "producer-03"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "indigo index shards nine shards",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "consumer-03"
+        }
+      },
+      "expected_write": [
+        "indigo index shards",
+        "nine shards"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-03",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the indigo index shards is nine shards."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the indigo index shards is nine shards.",
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "producer-03"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "indigo index shards nine shards",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "consumer-03"
+        }
+      },
+      "expected_write": [
+        "indigo index shards",
+        "nine shards"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-03",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the indigo index shards is nine shards."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-indigo-index"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the indigo index shards is nine shards."
+          }
+        ],
+        "workspace": "/eval/lifecycle/indigo-index",
+        "metadata": {
+          "session_id": "echo-03"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "indigo index shards nine shards",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/indigo-index"
+      },
+      "expected_write": [
+        "indigo index shards",
+        "nine shards"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-indigo-index",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-04",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the juniper API version is v4."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the juniper API version is v4.",
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "producer-04"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "juniper API version v4",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "consumer-04"
+        }
+      },
+      "expected_write": [
+        "juniper API version",
+        "v4"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-04",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the juniper API version is v4."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the juniper API version is v4.",
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "producer-04"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "juniper API version v4",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "consumer-04"
+        }
+      },
+      "expected_write": [
+        "juniper API version",
+        "v4"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-04",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the juniper API version is v4."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the juniper API version is v4.",
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "producer-04"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "juniper API version v4",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "consumer-04"
+        }
+      },
+      "expected_write": [
+        "juniper API version",
+        "v4"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-04",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the juniper API version is v4."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-juniper-api"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the juniper API version is v4."
+          }
+        ],
+        "workspace": "/eval/lifecycle/juniper-api",
+        "metadata": {
+          "session_id": "echo-04"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "juniper API version v4",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/juniper-api"
+      },
+      "expected_write": [
+        "juniper API version",
+        "v4"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-juniper-api",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-05",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the kepler queue limit is 640 messages."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the kepler queue limit is 640 messages.",
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "producer-05"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "kepler queue limit 640 messages",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "consumer-05"
+        }
+      },
+      "expected_write": [
+        "kepler queue limit",
+        "640 messages"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-05",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the kepler queue limit is 640 messages."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the kepler queue limit is 640 messages.",
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "producer-05"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "kepler queue limit 640 messages",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "consumer-05"
+        }
+      },
+      "expected_write": [
+        "kepler queue limit",
+        "640 messages"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-05",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the kepler queue limit is 640 messages."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the kepler queue limit is 640 messages.",
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "producer-05"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "kepler queue limit 640 messages",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "consumer-05"
+        }
+      },
+      "expected_write": [
+        "kepler queue limit",
+        "640 messages"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-05",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the kepler queue limit is 640 messages."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-kepler-queue"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the kepler queue limit is 640 messages."
+          }
+        ],
+        "workspace": "/eval/lifecycle/kepler-queue",
+        "metadata": {
+          "session_id": "echo-05"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "kepler queue limit 640 messages",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/kepler-queue"
+      },
+      "expected_write": [
+        "kepler queue limit",
+        "640 messages"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-kepler-queue",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-06",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the maple deploy region is us-west-2."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the maple deploy region is us-west-2.",
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "producer-06"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "maple deploy region us-west-2",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "consumer-06"
+        }
+      },
+      "expected_write": [
+        "maple deploy region",
+        "us-west-2"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-06",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the maple deploy region is us-west-2."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the maple deploy region is us-west-2.",
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "producer-06"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "maple deploy region us-west-2",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "consumer-06"
+        }
+      },
+      "expected_write": [
+        "maple deploy region",
+        "us-west-2"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-06",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the maple deploy region is us-west-2."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the maple deploy region is us-west-2.",
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "producer-06"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "maple deploy region us-west-2",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "consumer-06"
+        }
+      },
+      "expected_write": [
+        "maple deploy region",
+        "us-west-2"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-06",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the maple deploy region is us-west-2."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-maple-deploy"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the maple deploy region is us-west-2."
+          }
+        ],
+        "workspace": "/eval/lifecycle/maple-deploy",
+        "metadata": {
+          "session_id": "echo-06"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "maple deploy region us-west-2",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/maple-deploy"
+      },
+      "expected_write": [
+        "maple deploy region",
+        "us-west-2"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-maple-deploy",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-07",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the nebula log retention is twenty-one days."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the nebula log retention is twenty-one days.",
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "producer-07"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "nebula log retention twenty-one days",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "consumer-07"
+        }
+      },
+      "expected_write": [
+        "nebula log retention",
+        "twenty-one days"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-07",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the nebula log retention is twenty-one days."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the nebula log retention is twenty-one days.",
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "producer-07"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "nebula log retention twenty-one days",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "consumer-07"
+        }
+      },
+      "expected_write": [
+        "nebula log retention",
+        "twenty-one days"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-07",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the nebula log retention is twenty-one days."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the nebula log retention is twenty-one days.",
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "producer-07"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "nebula log retention twenty-one days",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "consumer-07"
+        }
+      },
+      "expected_write": [
+        "nebula log retention",
+        "twenty-one days"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-07",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the nebula log retention is twenty-one days."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-nebula-log"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the nebula log retention is twenty-one days."
+          }
+        ],
+        "workspace": "/eval/lifecycle/nebula-log",
+        "metadata": {
+          "session_id": "echo-07"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "nebula log retention twenty-one days",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/nebula-log"
+      },
+      "expected_write": [
+        "nebula log retention",
+        "twenty-one days"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-nebula-log",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-08",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the opal worker count is six workers."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the opal worker count is six workers.",
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "producer-08"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "opal worker count six workers",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "consumer-08"
+        }
+      },
+      "expected_write": [
+        "opal worker count",
+        "six workers"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-08",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the opal worker count is six workers."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the opal worker count is six workers.",
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "producer-08"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "opal worker count six workers",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "consumer-08"
+        }
+      },
+      "expected_write": [
+        "opal worker count",
+        "six workers"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-08",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the opal worker count is six workers."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the opal worker count is six workers.",
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "producer-08"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "opal worker count six workers",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "consumer-08"
+        }
+      },
+      "expected_write": [
+        "opal worker count",
+        "six workers"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-08",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the opal worker count is six workers."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-opal-worker"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the opal worker count is six workers."
+          }
+        ],
+        "workspace": "/eval/lifecycle/opal-worker",
+        "metadata": {
+          "session_id": "echo-08"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "opal worker count six workers",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/opal-worker"
+      },
+      "expected_write": [
+        "opal worker count",
+        "six workers"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-opal-worker",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-09",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the pearl request timeout is forty seconds."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the pearl request timeout is forty seconds.",
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "producer-09"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "pearl request timeout forty seconds",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "consumer-09"
+        }
+      },
+      "expected_write": [
+        "pearl request timeout",
+        "forty seconds"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-09",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the pearl request timeout is forty seconds."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the pearl request timeout is forty seconds.",
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "producer-09"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "pearl request timeout forty seconds",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "consumer-09"
+        }
+      },
+      "expected_write": [
+        "pearl request timeout",
+        "forty seconds"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-09",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the pearl request timeout is forty seconds."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the pearl request timeout is forty seconds.",
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "producer-09"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "pearl request timeout forty seconds",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "consumer-09"
+        }
+      },
+      "expected_write": [
+        "pearl request timeout",
+        "forty seconds"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-09",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the pearl request timeout is forty seconds."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-pearl-timeout"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the pearl request timeout is forty seconds."
+          }
+        ],
+        "workspace": "/eval/lifecycle/pearl-timeout",
+        "metadata": {
+          "session_id": "echo-09"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "pearl request timeout forty seconds",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/pearl-timeout"
+      },
+      "expected_write": [
+        "pearl request timeout",
+        "forty seconds"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-pearl-timeout",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "passive_after_restart-10",
+      "category": "passive_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the raven rollout batch is twelve percent."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the raven rollout batch is twelve percent.",
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "producer-10"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "raven rollout batch twelve percent",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "consumer-10"
+        }
+      },
+      "expected_write": [
+        "raven rollout batch",
+        "twelve percent"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "active_after_restart-10",
+      "category": "active_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the raven rollout batch is twelve percent."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the raven rollout batch is twelve percent.",
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "producer-10"
+        },
+        "repeat": 1
+      },
+      "recall": {
+        "mode": "active",
+        "query": "raven rollout batch twelve percent",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "consumer-10"
+        }
+      },
+      "expected_write": [
+        "raven rollout batch",
+        "twelve percent"
+      ],
+      "restart_before_recall": true
+    },
+    {
+      "id": "duplicate_consolidation-10",
+      "category": "duplicate_consolidation",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Record the durable decision."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the raven rollout batch is twelve percent."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "assistant": "Decision: the raven rollout batch is twelve percent.",
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "producer-10"
+        },
+        "repeat": 2
+      },
+      "recall": {
+        "mode": "active",
+        "query": "raven rollout batch twelve percent",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "consumer-10"
+        }
+      },
+      "expected_write": [
+        "raven rollout batch",
+        "twelve percent"
+      ],
+      "restart_before_recall": true,
+      "max_matching_hits": 1
+    },
+    {
+      "id": "recall_echo_after_restart-10",
+      "category": "recall_echo_after_restart",
+      "turns": [
+        {
+          "role": "user",
+          "text": "Use memory without writing it back."
+        },
+        {
+          "role": "assistant",
+          "text": "Decision: the raven rollout batch is twelve percent."
+        }
+      ],
+      "write": {
+        "target": "codex",
+        "event": "turn_end",
+        "messages": [
+          {
+            "role": "tool_call",
+            "text": "mcp__paxm__paxm_recall {\"query\":\"project decision\"}"
+          },
+          {
+            "role": "tool_result",
+            "text": "recalled-old-value-raven-rollout"
+          },
+          {
+            "role": "assistant",
+            "text": "Decision: the raven rollout batch is twelve percent."
+          }
+        ],
+        "workspace": "/eval/lifecycle/raven-rollout",
+        "metadata": {
+          "session_id": "echo-10"
+        }
+      },
+      "recall": {
+        "mode": "passive",
+        "query": "raven rollout batch twelve percent",
+        "limit": 3,
+        "workspace": "/eval/lifecycle/raven-rollout"
+      },
+      "expected_write": [
+        "raven rollout batch",
+        "twelve percent"
+      ],
+      "forbidden_write": [
+        "recalled-old-value-raven-rollout",
+        "paxm_recall"
+      ],
+      "restart_before_recall": true
+    }
+  ]
+}

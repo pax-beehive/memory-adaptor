@@ -26,20 +26,23 @@ type Suite struct {
 }
 
 type Case struct {
-	ID               string            `json:"id"`
-	Category         string            `json:"category"`
-	Turns            []Turn            `json:"turns,omitempty"`
-	Memories         []Memory          `json:"memories,omitempty"`
-	Write            *Write            `json:"write,omitempty"`
-	Recall           Recall            `json:"recall"`
-	Expected         []string          `json:"expected,omitempty"`
-	Forbidden        []string          `json:"forbidden,omitempty"`
-	ExpectedFirst    string            `json:"expected_first,omitempty"`
-	MaxHits          int               `json:"max_hits,omitempty"`
-	ExpectedWrite    []string          `json:"expected_write,omitempty"`
-	ForbiddenWrite   []string          `json:"forbidden_write,omitempty"`
-	ForbiddenRecall  []string          `json:"forbidden_recall,omitempty"`
-	ExpectedMetadata map[string]string `json:"expected_metadata,omitempty"`
+	ID                  string            `json:"id"`
+	Category            string            `json:"category"`
+	Turns               []Turn            `json:"turns,omitempty"`
+	Memories            []Memory          `json:"memories,omitempty"`
+	Write               *Write            `json:"write,omitempty"`
+	Recall              Recall            `json:"recall"`
+	Expected            []string          `json:"expected,omitempty"`
+	Forbidden           []string          `json:"forbidden,omitempty"`
+	ExpectedFirst       string            `json:"expected_first,omitempty"`
+	MaxHits             int               `json:"max_hits,omitempty"`
+	ExpectedWrite       []string          `json:"expected_write,omitempty"`
+	ForbiddenWrite      []string          `json:"forbidden_write,omitempty"`
+	ForbiddenRecall     []string          `json:"forbidden_recall,omitempty"`
+	ExpectedMetadata    map[string]string `json:"expected_metadata,omitempty"`
+	RestartBeforeRecall bool              `json:"restart_before_recall,omitempty"`
+	MaxMatchingHits     int               `json:"max_matching_hits,omitempty"`
+	ExpectedEmpty       bool              `json:"expected_empty,omitempty"`
 }
 
 type Turn struct {
@@ -56,6 +59,7 @@ type Write struct {
 	Messages       []Turn            `json:"messages,omitempty"`
 	Workspace      string            `json:"workspace,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
+	Repeat         int               `json:"repeat,omitempty"`
 }
 
 type Memory struct {
@@ -206,7 +210,7 @@ func (s Suite) Validate() error {
 		if c.Recall.Mode != "active" && c.Recall.Mode != "passive" && c.Recall.Mode != "passive_initial" {
 			return fmt.Errorf("case %q has unsupported recall mode %q", c.ID, c.Recall.Mode)
 		}
-		if c.Write == nil && len(c.Expected) == 0 {
+		if c.Write == nil && len(c.Expected) == 0 && !c.ExpectedEmpty {
 			return fmt.Errorf("case %q requires expected memory ids", c.ID)
 		}
 		if c.Write != nil {
@@ -221,6 +225,9 @@ func (s Suite) Validate() error {
 			}
 			if c.Write.IncludeHistory && c.Write.Event != "turn_end" {
 				return fmt.Errorf("case %q can include history only for turn_end", c.ID)
+			}
+			if c.Write.Repeat < 0 {
+				return fmt.Errorf("case %q conversation write repeat must be positive", c.ID)
 			}
 		}
 		refs := append(append([]string{}, c.Expected...), c.Forbidden...)
@@ -389,7 +396,17 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 			return result
 		}
 		writtenText, writtenMetadata = item.Text, item.Metadata
-		writeResult, writeErr := runtime.Service.IngestBatch(ctx, facade.IngestBatchInput{Items: []facade.IngestInput{item}})
+		repeats := scenario.Write.Repeat
+		if repeats == 0 {
+			repeats = 1
+		}
+		var writeResult facade.IngestResult
+		for range repeats {
+			writeResult, writeErr = runtime.Service.IngestBatch(ctx, facade.IngestBatchInput{Items: []facade.IngestInput{item}})
+			if writeErr != nil {
+				break
+			}
+		}
 		result.WriteDurationUS = time.Since(writeStarted).Microseconds()
 		if writeErr != nil {
 			result.Error = writeErr.Error()
@@ -399,6 +416,13 @@ func runCase(ctx context.Context, root string, scenario Case) (result CaseResult
 	}
 	for _, item := range scenario.Memories {
 		_, err = runtime.Service.Ingest(ctx, facade.IngestInput{ID: item.ID, Text: item.Text, Profile: profileForTier(item.Tier), Tier: item.Tier, ExpiresAt: item.ExpiresAt, Metadata: item.Metadata, Source: "eval:" + scenario.ID})
+		if err != nil {
+			result.Error = err.Error()
+			return result
+		}
+	}
+	if scenario.RestartBeforeRecall {
+		runtime, err = paxruntime.Load(configPath)
 		if err != nil {
 			result.Error = err.Error()
 			return result
@@ -510,6 +534,9 @@ func (r *CaseResult) scoreConversationWrite(scenario Case, writtenText string, m
 		r.PrecisionAtK = float64(matchingHits) / float64(len(hits))
 		r.ReciprocalRank = 1 / float64(firstRank)
 	}
+	if scenario.MaxMatchingHits > 0 && matchingHits > scenario.MaxMatchingHits {
+		r.Error = fmt.Sprintf("returned %d matching hits; expected at most %d", matchingHits, scenario.MaxMatchingHits)
+	}
 	r.Passed = r.Written && len(r.WriteMissing) == 0 && len(r.WriteForbidden) == 0 && len(r.Forbidden) == 0 && len(r.MetadataMismatches) == 0 && r.RecallAtK == 1 && r.Error == ""
 }
 
@@ -527,6 +554,14 @@ func containsFold(text, fragment string) bool {
 }
 
 func (r *CaseResult) score(scenario Case) {
+	if scenario.ExpectedEmpty {
+		r.Passed = len(r.HitIDs) == 0
+		if !r.Passed {
+			r.Unexpected = append(r.Unexpected, r.HitIDs...)
+			r.Error = fmt.Sprintf("returned %d hits; expected none", len(r.HitIDs))
+		}
+		return
+	}
 	expected, forbidden := stringSet(scenario.Expected), stringSet(scenario.Forbidden)
 	foundExpected := 0
 	firstRank := 0
