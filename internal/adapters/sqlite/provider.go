@@ -167,7 +167,7 @@ func mergeLifecycleMetadata(ctx context.Context, tx *sql.Tx, item memory.MemoryI
 	if err != nil {
 		return nil, err
 	}
-	if existingFingerprint := strings.TrimSpace(existing[memory.MetadataFingerprint]); existingFingerprint != "" && existingFingerprint != fingerprint {
+	if existingFingerprint := strings.TrimSpace(existing[memory.MetadataFingerprint]); existingFingerprint != fingerprint {
 		return nil, fmt.Errorf("sqlite memory %q fingerprint conflict", item.ID)
 	}
 
