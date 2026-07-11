@@ -147,10 +147,11 @@ show that installation, hook trust, upgrade, disable, and rollback are reliable.
 
 Status: local retrieval and conversation-to-write baselines implemented.
 `evals/baseline/suite.json` contains 100 versioned SQLite retrieval cases, and
-`evals/conversation-write/suite.json` contains 40 cases with normalized
+`evals/conversation-write/suite.json` contains 50 cases with normalized
 conversation history and hook messages that execute production write, ingest,
-and later recall paths. `paxm eval run` emits terminal or JSON results and CI
-runs both suites. Lifecycle and
+and later recall paths, including passive recall-envelope and active recall-tool
+echo suppression. `paxm eval run` emits terminal or JSON results and CI runs
+both suites. Lifecycle and
 consolidation scenarios, comparison mode, provider-level latency, regression
 budgets, and opt-in remote-provider evaluation remain follow-up slices.
 

@@ -3,11 +3,14 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pax-beehive/memory-adaptor/internal/config"
+	"github.com/pax-beehive/memory-adaptor/internal/facade"
+	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
 
 func TestServerServesMemoryToolsOverStdio(t *testing.T) {
@@ -73,6 +76,19 @@ func TestServerServesMemoryToolsOverStdio(t *testing.T) {
 	if recallResult.IsError || !strings.Contains(recallResult.Content[0].Text, "paxm mcp mode remembers") {
 		t.Fatalf("unexpected recall result: %#v", recallResult)
 	}
+	for _, marker := range []string{`<paxm-recall version="1" mode="active">`, `</paxm-recall>`} {
+		if !strings.Contains(recallResult.Content[0].Text, marker) {
+			t.Fatalf("recall result omitted envelope %q: %#v", marker, recallResult)
+		}
+	}
+	structured, ok := recallResult.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("recall structured content has unexpected type: %#v", recallResult.StructuredContent)
+	}
+	context, ok := structured["paxm_context"].(map[string]any)
+	if !ok || context["kind"] != "recall" || context["mode"] != "active" {
+		t.Fatalf("recall structured content omitted provenance: %#v", structured)
+	}
 
 	var historyResult toolResult
 	decodeResult(t, responses[4], &historyResult)
@@ -84,6 +100,25 @@ func TestServerServesMemoryToolsOverStdio(t *testing.T) {
 	decodeResult(t, responses[5], &doctorResult)
 	if doctorResult.IsError || !strings.Contains(doctorResult.Content[0].Text, `"provider": "sqlite"`) {
 		t.Fatalf("unexpected doctor result: %#v", doctorResult)
+	}
+}
+
+func TestRecallErrorToolResultMarksPartialHits(t *testing.T) {
+	t.Parallel()
+	result := recallErrorToolResult(errors.New("required provider failed"), facade.RecallResult{
+		Query: "deployment",
+		Hits:  []memory.MemoryHit{{Provider: "sqlite", ID: "partial", Text: "partial recalled memory"}},
+	})
+	if !result.IsError || !strings.Contains(result.Content[0].Text, `<paxm-recall version="1" mode="active">`) || !strings.Contains(result.Content[0].Text, "partial recalled memory") {
+		t.Fatalf("partial recall error omitted text provenance: %#v", result)
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("partial recall structured content has unexpected type: %#v", result.StructuredContent)
+	}
+	context, ok := structured["paxm_context"].(map[string]any)
+	if !ok || context["kind"] != "recall" || context["mode"] != "active" {
+		t.Fatalf("partial recall error omitted structured provenance: %#v", structured)
 	}
 }
 

@@ -284,6 +284,7 @@ func effectiveHookRecallConfig(recall config.HookRecallConfig, event HookEvent) 
 }
 
 func (s *Service) HookWriteItem(event HookEvent) (IngestInput, bool, error) {
+	event = stripRecallContextFromHookEvent(event)
 	if event.Target == "" {
 		event.Target = "codex"
 	}

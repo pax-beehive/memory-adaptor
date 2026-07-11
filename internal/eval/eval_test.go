@@ -30,20 +30,20 @@ func TestBaselineSuiteHasOneHundredValidatedCases(t *testing.T) {
 	}
 }
 
-func TestConversationWriteSuiteHasFortyValidatedCases(t *testing.T) {
+func TestConversationWriteSuiteHasFiftyValidatedCases(t *testing.T) {
 	suite, err := Load(filepath.Join("..", "..", "evals", "conversation-write"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(suite.Cases) != 40 {
-		t.Fatalf("conversation-write suite has %d cases, want 40", len(suite.Cases))
+	if len(suite.Cases) != 50 {
+		t.Fatalf("conversation-write suite has %d cases, want 50", len(suite.Cases))
 	}
 	categories := map[string]int{}
 	for _, item := range suite.Cases {
 		categories[item.Category]++
 	}
-	if len(categories) != 8 {
-		t.Fatalf("conversation-write suite has %d categories, want 8", len(categories))
+	if len(categories) != 10 {
+		t.Fatalf("conversation-write suite has %d categories, want 10", len(categories))
 	}
 	for name, count := range categories {
 		if count != 5 {

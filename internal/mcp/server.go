@@ -322,9 +322,9 @@ func (s *Server) callRecall(ctx context.Context, raw json.RawMessage) toolResult
 		fmt.Fprintf(s.stderr, "paxm telemetry skipped: %s\n", err)
 	}
 	if opErr != nil {
-		return errorToolResultWithContent(opErr, result)
+		return recallErrorToolResult(opErr, result)
 	}
-	return structuredToolResult(result)
+	return recallToolResult(result)
 }
 
 type rememberArgs struct {
@@ -440,6 +440,37 @@ func structuredToolResult(value any) toolResult {
 		Content:           []textContent{{Type: "text", Text: jsonText(value)}},
 		StructuredContent: value,
 	}
+}
+
+func recallToolResult(value facade.RecallResult) toolResult {
+	structured := struct {
+		facade.RecallResult
+		PaxmContext map[string]any `json:"paxm_context"`
+	}{
+		RecallResult: value,
+		PaxmContext:  recallContextMetadata(),
+	}
+	return toolResult{
+		Content:           []textContent{{Type: "text", Text: facade.WrapRecallContext("active", jsonText(value))}},
+		StructuredContent: structured,
+	}
+}
+
+func recallErrorToolResult(err error, result facade.RecallResult) toolResult {
+	content := map[string]any{
+		"error":        err.Error(),
+		"result":       result,
+		"paxm_context": recallContextMetadata(),
+	}
+	return toolResult{
+		Content:           []textContent{{Type: "text", Text: facade.WrapRecallContext("active", jsonText(content))}},
+		StructuredContent: content,
+		IsError:           true,
+	}
+}
+
+func recallContextMetadata() map[string]any {
+	return map[string]any{"version": 1, "kind": "recall", "mode": "active"}
 }
 
 func errorToolResult(err error) toolResult {

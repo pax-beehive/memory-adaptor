@@ -361,6 +361,171 @@ func TestTurnEndCombinesAssistantAndToolMessagesWithoutDuplication(t *testing.T)
 	}
 }
 
+func TestHookWriteItemStripsRecalledContextButKeepsNewConclusion(t *testing.T) {
+	t.Parallel()
+	service := newSQLiteServiceForAgent(t, "claude")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target: "claude",
+		Event:  "turn_end",
+		Assistant: strings.Join([]string{
+			"<paxm-recall version=\"1\" mode=\"passive\">",
+			"The old deployment requires PAX_ENV=production.",
+			"</paxm-recall>",
+			"New conclusion: verify the release artifact checksum too.",
+		}, "\n"),
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	if strings.Contains(item.Text, "old deployment") {
+		t.Fatalf("recalled context was written back: %q", item.Text)
+	}
+	if !strings.Contains(item.Text, "New conclusion: verify the release artifact checksum too.") {
+		t.Fatalf("new conclusion was removed: %q", item.Text)
+	}
+}
+
+func TestHookWriteItemDropsPaxmRecallToolExchange(t *testing.T) {
+	t.Parallel()
+	service := newSQLiteServiceForAgent(t, "codex")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target: "codex",
+		Event:  "turn_end",
+		Messages: []HookMessage{
+			{Role: "tool_call", Text: `mcp__paxm__paxm_recall {"query":"deployment"}`},
+			{Role: "tool_result", Text: `{"hits":[{"text":"The old deployment requires PAX_ENV=production."}]}`},
+			{Role: "assistant", Text: "New conclusion: verify the release artifact checksum too."},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	for _, forbidden := range []string{"paxm_recall", "old deployment"} {
+		if strings.Contains(item.Text, forbidden) {
+			t.Fatalf("paxm recall tool exchange was written back: %q", item.Text)
+		}
+	}
+	if !strings.Contains(item.Text, "New conclusion: verify the release artifact checksum too.") {
+		t.Fatalf("new conclusion was removed: %q", item.Text)
+	}
+}
+
+func TestHookWriteItemDropsConfiguredPaxmRecallCommand(t *testing.T) {
+	t.Parallel()
+	service := newSQLiteServiceForAgent(t, "pi")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target: "pi",
+		Event:  "turn_end",
+		Messages: []HookMessage{
+			{Role: "tool_call", Text: `Bash {"command":"/usr/local/bin/paxm --config /tmp/paxm.yaml recall --query deployment"}`},
+			{Role: "tool_result", Text: "The old deployment requires PAX_ENV=production."},
+			{Role: "assistant", Text: "New conclusion: verify the release artifact checksum too."},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	if strings.Contains(item.Text, "old deployment") {
+		t.Fatalf("configured paxm recall result was written back: %q", item.Text)
+	}
+	if !strings.Contains(item.Text, "New conclusion: verify the release artifact checksum too.") {
+		t.Fatalf("new conclusion was removed: %q", item.Text)
+	}
+}
+
+func TestHookWriteItemKeepsCommandsThatOnlyMentionPaxmRecall(t *testing.T) {
+	t.Parallel()
+	service := newSQLiteServiceForAgent(t, "codex")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target: "codex",
+		Event:  "turn_end",
+		Messages: []HookMessage{
+			{Role: "tool_call", Text: `Bash {"command":"rg paxm_recall internal"}`},
+			{Role: "tool_result", Text: "internal/mcp/server.go: case paxm_recall"},
+			{Role: "tool_call", Text: `Bash {"command":"paxm remember --text recall"}`},
+			{Role: "tool_result", Text: "stored memory: sqlite/example"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	for _, expected := range []string{"rg paxm_recall internal", "internal/mcp/server.go", "paxm remember", "stored memory"} {
+		if !strings.Contains(item.Text, expected) {
+			t.Fatalf("ordinary tool evidence was removed: %q", item.Text)
+		}
+	}
+}
+
+func TestHookWriteItemDropsProvenanceMarkedRecallResultWhenToolsInterleave(t *testing.T) {
+	t.Parallel()
+	service := newSQLiteServiceForAgent(t, "codex")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target: "codex",
+		Event:  "turn_end",
+		Messages: []HookMessage{
+			{Role: "tool_call", Text: `mcp__paxm__paxm_recall {"query":"deployment"}`},
+			{Role: "tool_call", Text: `Read {"path":"README.md"}`},
+			{Role: "tool_result", Text: "README evidence must remain."},
+			{Role: "tool_result", Text: `{"query":"deployment","hits":[{"text":"old recalled deployment"}],"paxm_context":{"version":1,"kind":"recall","mode":"active"}}`},
+			{Role: "assistant", Text: "New conclusion: verify the release artifact checksum too."},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	if strings.Contains(item.Text, "old recalled deployment") {
+		t.Fatalf("interleaved recall result was written back: %q", item.Text)
+	}
+	for _, expected := range []string{"Read", "README evidence must remain.", "New conclusion"} {
+		if !strings.Contains(item.Text, expected) {
+			t.Fatalf("unrelated evidence was removed: %q", item.Text)
+		}
+	}
+}
+
+func TestRecallEchoDoesNotAccumulateAcrossFiveWriteCycles(t *testing.T) {
+	t.Parallel()
+	service := newSQLiteServiceForAgent(t, "claude")
+	workspace := "/eval/recall-echo-cycle"
+	original := "Recall echo sentinel: production deploys require PAX_ENV=production."
+	if _, err := service.Ingest(context.Background(), IngestInput{Text: original, Profile: "ltm", Metadata: map[string]string{"workspace": workspace}}); err != nil {
+		t.Fatal(err)
+	}
+	for cycle := 0; cycle < 5; cycle++ {
+		item, ok, err := service.HookWriteItem(HookEvent{
+			Target:    "claude",
+			Event:     "turn_end",
+			Workspace: workspace,
+			Assistant: WrapRecallContext("passive", original) + "\nNew conclusion: verify the artifact checksum.",
+		})
+		if err != nil || !ok {
+			t.Fatalf("cycle %d HookWriteItem() = %#v, %v, %v", cycle, item, ok, err)
+		}
+		if strings.Contains(item.Text, original) {
+			t.Fatalf("cycle %d retained recalled content: %q", cycle, item.Text)
+		}
+		if _, err := service.Ingest(context.Background(), item); err != nil {
+			t.Fatalf("cycle %d ingest: %v", cycle, err)
+		}
+	}
+	recalled, err := service.Recall(context.Background(), RecallInput{Query: "Recall echo sentinel PAX_ENV production", Profile: "default", Limit: 10, Meta: map[string]string{"workspace": workspace}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := 0
+	for _, hit := range recalled.Hits {
+		if strings.Contains(hit.Text, "Recall echo sentinel") {
+			matches++
+			if hit.Text != original {
+				t.Fatalf("echo-derived memory survived: %q", hit.Text)
+			}
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("original recall matches = %d, want 1: %#v", matches, recalled.Hits)
+	}
+}
+
 func TestToolUseHookWritesNormalizedToolActivity(t *testing.T) {
 	t.Parallel()
 	service := newSQLiteServiceForAgent(t, "claude")

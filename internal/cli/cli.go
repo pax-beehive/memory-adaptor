@@ -550,10 +550,28 @@ func (r runner) runRecall(args []string) error {
 		return err
 	}
 	if *jsonOut {
-		return writeJSON(r.stdout, result)
+		return writeRecallJSON(r.stdout, result, "active")
 	}
-	writeRecallMarkdown(r.stdout, result)
+	writeRecallContextMarkdown(r.stdout, result, "active")
 	return nil
+}
+
+type recallJSONOutput struct {
+	facade.RecallResult
+	PaxmContext recallJSONContext `json:"paxm_context"`
+}
+
+type recallJSONContext struct {
+	Version int    `json:"version"`
+	Kind    string `json:"kind"`
+	Mode    string `json:"mode"`
+}
+
+func writeRecallJSON(w io.Writer, result facade.RecallResult, mode string) error {
+	return writeJSON(w, recallJSONOutput{
+		RecallResult: result,
+		PaxmContext:  recallJSONContext{Version: 1, Kind: "recall", Mode: mode},
+	})
 }
 
 func (r runner) runEval(args []string) error {
@@ -704,7 +722,7 @@ func (r runner) executeHook(event facade.HookEvent, jsonOut, codexNative bool) e
 	if result.Skipped || result.Recall == nil {
 		return nil
 	}
-	writeRecallMarkdown(r.stdout, *result.Recall)
+	writeRecallContextMarkdown(r.stdout, *result.Recall, "passive")
 	return nil
 }
 
@@ -723,14 +741,14 @@ func writeCodexUserPromptHookOutput(w io.Writer, result facade.HookResult) error
 	}
 	var context bytes.Buffer
 	writeRecallMarkdown(&context, *result.Recall)
-	additionalContext := strings.TrimSpace(context.String())
+	additionalContext := facade.WrapRecallContext("passive", "Relevant memory recalled by paxm:\n\n"+strings.TrimSpace(context.String()))
 	if additionalContext == "" {
 		return nil
 	}
 	return writeJSON(w, codexUserPromptHookOutput{
 		HookSpecificOutput: codexUserPromptHookSpecificOutput{
 			HookEventName:     "UserPromptSubmit",
-			AdditionalContext: "Relevant memory recalled by paxm:\n\n" + additionalContext,
+			AdditionalContext: additionalContext,
 		},
 	})
 }
@@ -2871,14 +2889,24 @@ function formatPaxmRecall(raw: string): string {
     for (const hit of result.recall.hits) {
       const score = typeof hit.score === "number" ? hit.score.toFixed(4) : "n/a";
       const provider = hit.provider ? String(hit.provider) : "unknown";
-      const text = hit.text ? String(hit.text).trim() : "";
+      const text = hit.text ? escapePaxmRecallText(String(hit.text).trim()) : "";
       if (text === "") continue;
       lines.push("- [" + provider + " score=" + score + "] " + text);
     }
-    return lines.length > 1 ? lines.join("\n") : "";
+    return lines.length > 1
+      ? '<paxm-recall version="1" mode="passive">\n' + lines.join("\n") + "\n</paxm-recall>"
+      : "";
   } catch {
-    return raw.trim();
+    const text = escapePaxmRecallText(raw.trim());
+    if (text === "" || text.includes("<paxm-recall")) return text;
+    return '<paxm-recall version="1" mode="passive">\n' + text + "\n</paxm-recall>";
   }
+}
+
+function escapePaxmRecallText(text: string): string {
+  return text
+    .split("</paxm-recall>").join("&lt;/paxm-recall&gt;")
+    .split("<paxm-recall").join("&lt;paxm-recall");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -3352,6 +3380,16 @@ func writeRecallMarkdown(w io.Writer, result facade.RecallResult) {
 		fmt.Fprintln(w, strings.TrimSpace(hit.Text))
 		fmt.Fprintln(w)
 	}
+}
+
+func writeRecallContextMarkdown(w io.Writer, result facade.RecallResult, mode string) {
+	if len(result.Hits) == 0 {
+		writeRecallMarkdown(w, result)
+		return
+	}
+	var context bytes.Buffer
+	writeRecallMarkdown(&context, result)
+	fmt.Fprintln(w, facade.WrapRecallContext(mode, context.String()))
 }
 
 func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {

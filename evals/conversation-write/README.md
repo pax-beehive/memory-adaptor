@@ -1,9 +1,10 @@
 # Conversation-to-write baseline
 
-This version 1 suite contains 40 deterministic SQLite cases: five sanitized
-topic variants across eight scenario families. It exercises Codex, Claude Code,
+This version 1 suite contains 50 deterministic SQLite cases: five sanitized
+topic variants across ten scenario families. It exercises Codex, Claude Code,
 and Pi writes for user input, turn completion, successful and failed tool use,
-mixed visible messages, reasoning suppression, and metadata preservation.
+mixed visible messages, reasoning suppression, metadata preservation, passive
+recall-envelope suppression, and active recall-tool suppression.
 Every scenario has normalized user and assistant history, a separate normalized
 hook-event message payload, and a seeded harmful recall distractor. Scenarios
 whose real hook supplies complete turn history, such as Pi `turn_end`, set
@@ -26,6 +27,9 @@ Write precision divides retained expected fragments by retained expected plus
 forbidden fragments. The write false-positive rate is the share of forbidden
 candidates that appeared. These are deterministic capture-quality signals, not
 a semantic memory extraction benchmark.
+
+Facade integration coverage also repeats recall-to-write five times against one
+SQLite database and asserts that no echo-derived memory accumulates.
 
 Run the suite with:
 

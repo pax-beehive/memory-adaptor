@@ -102,6 +102,30 @@ func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
 	if !strings.Contains(stdout.String(), "hook passive recall") {
 		t.Fatalf("unexpected recall output: %s", stdout.String())
 	}
+	for _, marker := range []string{`<paxm-recall version="1" mode="active">`, `</paxm-recall>`} {
+		if !strings.Contains(stdout.String(), marker) {
+			t.Fatalf("active recall output omitted envelope %q: %s", marker, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"--config", configPath, "recall", "--query", "passive recall", "--json"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("JSON recall failed with code %d: %s", code, stderr.String())
+	}
+	var recalledJSON struct {
+		PaxmContext struct {
+			Kind string `json:"kind"`
+			Mode string `json:"mode"`
+		} `json:"paxm_context"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &recalledJSON); err != nil {
+		t.Fatalf("JSON recall output is invalid: %v\n%s", err, stdout.String())
+	}
+	if recalledJSON.PaxmContext.Kind != "recall" || recalledJSON.PaxmContext.Mode != "active" {
+		t.Fatalf("JSON recall output omitted provenance: %s", stdout.String())
+	}
 
 	stdout.Reset()
 	stderr.Reset()
@@ -325,6 +349,8 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 	extensionText := string(extension)
 	for _, expected := range []string{
 		`pi.on("before_agent_start"`,
+		`<paxm-recall version="1" mode="passive">`,
+		`.split("</paxm-recall>").join("&lt;/paxm-recall&gt;")`,
 		`onRuntimeEvent("message_end"`,
 		`onRuntimeEvent("tool_execution_start"`,
 		`onRuntimeEvent("tool_execution_end"`,
@@ -783,6 +809,14 @@ func TestInternalCodexUserInputHookEmitsNativeContext(t *testing.T) {
 	}
 	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "codex native hook contract") {
 		t.Fatalf("native context omitted recalled memory: %#v", output)
+	}
+	for _, marker := range []string{`<paxm-recall version="1" mode="passive">`, `</paxm-recall>`} {
+		if !strings.Contains(output.HookSpecificOutput.AdditionalContext, marker) {
+			t.Fatalf("native context omitted recall envelope %q: %#v", marker, output)
+		}
+	}
+	if cleaned := facade.StripRecallContext(output.HookSpecificOutput.AdditionalContext); cleaned != "" {
+		t.Fatalf("native context left text outside the recall envelope: %q", cleaned)
 	}
 	if output.Target != "" || output.Event != "" {
 		t.Fatalf("internal paxm hook fields leaked into Codex output: %#v", output)

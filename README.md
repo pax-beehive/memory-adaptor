@@ -615,7 +615,7 @@ go run ./cmd/paxm eval run --suite evals/baseline
 go run ./cmd/paxm eval run --suite evals/baseline --json
 ```
 
-Run the deterministic 40-case conversation-to-write baseline:
+Run the deterministic 50-case conversation-to-write baseline:
 
 ```bash
 go run ./cmd/paxm eval run --suite evals/conversation-write
@@ -629,6 +629,14 @@ reports write recall, write precision, forbidden-fragment insertion rate,
 write/recall latency totals, result count, and returned recall-content size
 after running normalized hook messages through the production hook write,
 ingest, and later recall path.
+
+Recall context is enclosed in a versioned `<paxm-recall>` block. Passive writes
+strip complete recall blocks and discard paxm active-recall tool call/result
+pairs before rendering hook evidence. This prevents recalled memory from being
+stored again while retaining new conclusions written by the agent. Exact LTM
+consolidation remains a final fallback rather than the primary echo defense.
+Structured JSON recall adds a compatible `paxm_context` provenance field so
+interleaved tool results can be recognized without relying on adjacency.
 
 ## Releases
 
