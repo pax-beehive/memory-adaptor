@@ -2,11 +2,55 @@ package eval
 
 import (
 	"context"
+	"math"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
+
+func TestComparisonAndRegressionBudgetDescribeObservableChanges(t *testing.T) {
+	baseline := Result{Suite: "same", Version: 1, CaseCount: 10, Passed: 10, RecallAtK: 1, PrecisionAtK: .9, MRR: 1, FalsePositiveRate: .05, WriteFalsePositiveRate: .1}
+	current := Result{Suite: "same", Version: 1, CaseCount: 10, Passed: 9, RecallAtK: .9, PrecisionAtK: .8, MRR: .9, FalsePositiveRate: .1, WriteFalsePositiveRate: .2}
+	comparison, err := Compare(baseline, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.PassedDelta != -1 || math.Abs(comparison.RecallAtKDelta+.1) > 1e-9 || math.Abs(comparison.FalsePositiveRateDelta-.05) > 1e-9 {
+		t.Fatalf("unexpected comparison: %#v", comparison)
+	}
+	if math.Abs(comparison.WriteFalsePositiveRateDelta-.1) > 1e-9 {
+		t.Fatalf("write false-positive delta = %v", comparison.WriteFalsePositiveRateDelta)
+	}
+	failures := CheckBudget(current, Budget{MinPassRate: 1, MinRecallAtK: .95, MinPrecisionAtK: .8, MinMRR: .9, MaxFalsePositiveRate: .05})
+	if len(failures) != 3 || !strings.Contains(strings.Join(failures, " "), "pass rate") {
+		t.Fatalf("unexpected budget failures: %#v", failures)
+	}
+}
+
+func TestComparisonRejectsIncompatibleResults(t *testing.T) {
+	_, err := Compare(Result{Suite: "a", Version: 1, CaseCount: 10}, Result{Suite: "b", Version: 1, CaseCount: 10})
+	if err == nil {
+		t.Fatal("incompatible suites were compared")
+	}
+}
+
+func TestLoadBudgetRejectsUnknownAndMissingFields(t *testing.T) {
+	for _, content := range []string{
+		`{"min_pass_rate":1,"min_recall_at_k":1,"min_precision_at_k":1,"min_mrr":1,"max_false_positive_rate":0,"typo":1}`,
+		`{"min_pass_rate":1,"min_precision_at_k":1,"min_mrr":1,"max_false_positive_rate":0}`,
+	} {
+		path := filepath.Join(t.TempDir(), "budget.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadBudget(path); err == nil {
+			t.Fatalf("invalid budget accepted: %s", content)
+		}
+	}
+}
 
 func TestBaselineSuiteHasOneHundredValidatedCases(t *testing.T) {
 	suite, err := Load(filepath.Join("..", "..", "evals", "baseline"))
@@ -48,6 +92,28 @@ func TestConversationWriteSuiteHasFiftyValidatedCases(t *testing.T) {
 	for name, count := range categories {
 		if count != 5 {
 			t.Fatalf("category %s has %d cases, want 5", name, count)
+		}
+	}
+}
+
+func TestLifecycleSuiteHasFortyValidatedCases(t *testing.T) {
+	suite, err := Load(filepath.Join("..", "..", "evals", "lifecycle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suite.Cases) != 40 {
+		t.Fatalf("lifecycle suite has %d cases, want 40", len(suite.Cases))
+	}
+	categories := map[string]int{}
+	for _, item := range suite.Cases {
+		categories[item.Category]++
+	}
+	if len(categories) != 4 {
+		t.Fatalf("lifecycle suite has %d categories, want 4", len(categories))
+	}
+	for name, count := range categories {
+		if count != 10 {
+			t.Fatalf("category %s has %d cases, want 10", name, count)
 		}
 	}
 }
