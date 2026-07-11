@@ -119,7 +119,11 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 	if err != nil {
 		return nil, err
 	}
-	return mapSearchResults(result), nil
+	hits := mapSearchResults(result)
+	for i := range hits {
+		hits[i].Provider = p.name
+	}
+	return hits, nil
 }
 
 func (p *Provider) Put(ctx context.Context, item memory.MemoryItem) (memory.MemoryRef, error) {

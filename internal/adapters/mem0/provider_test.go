@@ -12,9 +12,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pax-beehive/memory-adaptor/internal/adapters/contracttest"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
+
+func TestProviderAdapterContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi.json":
+			_, _ = w.Write([]byte(`{"openapi":"3.1.0"}`))
+		case "/memories":
+			_, _ = w.Write([]byte(`{"results":[{"id":"mem-write","memory":"mem0 adapter contract"}]}`))
+		case "/search":
+			_, _ = w.Write([]byte(`{"results":[{"id":"mem-hit","memory":"mem0 adapter contract","score":0.9}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	provider, err := New("mem0", config.ProviderConfig{BaseURL: server.URL, UserID: "contract-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.Run(t, provider, contracttest.Expectation{
+		Name: "mem0", Item: memory.MemoryItem{Text: "mem0 adapter contract"}, Query: memory.SearchQuery{Text: "mem0 adapter contract", Limit: 3},
+		RefID: "mem-write", HitID: "mem-hit", HitText: "mem0 adapter contract",
+	})
+}
 
 type httpDoerFunc func(*http.Request) (*http.Response, error)
 

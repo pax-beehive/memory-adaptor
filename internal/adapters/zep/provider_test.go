@@ -9,9 +9,26 @@ import (
 
 	zepgo "github.com/getzep/zep-go/v3"
 	"github.com/getzep/zep-go/v3/option"
+	"github.com/pax-beehive/memory-adaptor/internal/adapters/contracttest"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
+
+func TestProviderAdapterContract(t *testing.T) {
+	relevance := 0.9
+	client := &fakeGraphClient{
+		batchResult:  []*zepgo.Episode{{UUID: "episode-write"}},
+		searchResult: &zepgo.GraphSearchResults{Episodes: []*zepgo.Episode{{UUID: "episode-hit", Content: "zep adapter contract", Relevance: &relevance}}},
+	}
+	provider, err := newWithClient("zep", config.ProviderConfig{APIKey: "key", UserID: "user-1", SearchScope: "episodes"}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.Run(t, provider, contracttest.Expectation{
+		Name: "zep", Item: memory.MemoryItem{Text: "zep adapter contract"}, Query: memory.SearchQuery{Text: "zep adapter contract", Limit: 3},
+		RefID: "episode-write", HitID: "episode-hit", HitText: "zep adapter contract",
+	})
+}
 
 type fakeGraphClient struct {
 	addRequest    *zepgo.AddDataRequest

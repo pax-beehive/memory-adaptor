@@ -9,8 +9,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pax-beehive/memory-adaptor/internal/adapters/contracttest"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
+
+func TestProviderAdapterContract(t *testing.T) {
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "contract.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracttest.Run(t, provider, contracttest.Expectation{
+		Name: "sqlite", Item: memory.MemoryItem{Text: "cobalt adapter contract", Source: "contract"},
+		Query: memory.SearchQuery{Text: "cobalt adapter contract", Limit: 3}, RefID: "", HitID: "", HitText: "cobalt adapter contract",
+	})
+}
 
 func TestProviderPutAndSearch(t *testing.T) {
 	t.Parallel()
