@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -471,6 +473,60 @@ func TestCLISetupInstallsClaudeCodeHooks(t *testing.T) {
 	}
 	if cfg.Agents["codex"].Enabled || cfg.Agents["pi"].Enabled {
 		t.Fatalf("only Claude Code should be enabled: %#v", cfg.Agents)
+	}
+}
+
+func TestClaudePluginOwnershipRemovesOnlyLegacyPaxmHooks(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	settingsPath := filepath.Join(dir, "claude", "settings.json")
+	t.Setenv("PAXM_CLAUDE_SETTINGS", settingsPath)
+	legacy := filepath.Join(dir, "hooks", "claude-turn_end")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":%q},{"type":"command","command":"/tmp/keep-me"}]}]}}`, legacy)
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig(configPath)
+	claude := cfg.Agents["claude"]
+	claude.Enabled = true
+	claude.Integration.Owner = config.IntegrationOwnerClaudePlugin
+	cfg.Agents["claude"] = claude
+	var stdout bytes.Buffer
+	r := runner{stdout: &stdout, stderr: io.Discard, configPath: configPath}
+	if err := r.installSelectedHookIntegrations(configPath, cfg, map[string]bool{"claude": true}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), legacy) || !strings.Contains(string(content), "/tmp/keep-me") {
+		t.Fatalf("unexpected settings: %s", content)
+	}
+	if !strings.Contains(stdout.String(), "paxm-claude plugin") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestClaudePluginYesSetupEnablesOnlyClaudeTarget(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PAXM_CLAUDE_SETTINGS", filepath.Join(t.TempDir(), "settings.json"))
+	var stdout, stderr bytes.Buffer
+	if code := Main([]string{"--config", configPath, "setup", "--integration", "claude-plugin", "--yes"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup code=%d: %s", code, stderr.String())
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Agents["claude"].Enabled || cfg.Agents["claude"].Integration.Owner != config.IntegrationOwnerClaudePlugin {
+		t.Fatalf("claude not plugin-owned: %#v", cfg.Agents["claude"])
+	}
+	if cfg.Agents["pi"].Enabled {
+		t.Fatalf("plugin setup unexpectedly enabled pi")
 	}
 }
 

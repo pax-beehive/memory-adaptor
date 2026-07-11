@@ -160,12 +160,12 @@ func TestValidateAcceptsKnownIntegrationOwners(t *testing.T) {
 	t.Parallel()
 
 	cfg := DefaultConfig(filepath.Join(t.TempDir(), "config.yaml"))
-	for _, owner := range []string{"", IntegrationOwnerPaxm, IntegrationOwnerCodexPlugin} {
-		codex := cfg.Agents["codex"]
-		codex.Integration.Owner = owner
-		cfg.Agents["codex"] = codex
+	for _, tc := range []struct{ agent, owner string }{{"codex", ""}, {"codex", IntegrationOwnerPaxm}, {"codex", IntegrationOwnerCodexPlugin}, {"claude", IntegrationOwnerClaudePlugin}} {
+		agent := cfg.Agents[tc.agent]
+		agent.Integration.Owner = tc.owner
+		cfg.Agents[tc.agent] = agent
 		if err := Validate(cfg); err != nil {
-			t.Fatalf("Validate() owner %q: %v", owner, err)
+			t.Fatalf("Validate() owner %q: %v", tc.owner, err)
 		}
 	}
 	codex := cfg.Agents["codex"]

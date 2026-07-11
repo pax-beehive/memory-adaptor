@@ -268,6 +268,14 @@ integration when passive lifecycle hooks or distribution materially improve the
 experience. Each new agent integration must include a real end-to-end test that
 proves write and recall through the agent's actual runtime.
 
+Claude Code plugin status: local spike completed. The repo plugin packages the
+paxm skills, all five existing Claude lifecycle hooks, and `paxm mcp serve`.
+`paxm setup --integration claude-plugin` migrates ownership and removes only
+legacy paxm-managed Claude hooks. Local real-runtime acceptance proved passive
+write, fresh-session passive recall, MCP active recall, marketplace install,
+disable, and re-enable behavior. Public release/version pairing remains before
+the plugin is treated as a supported distribution channel.
+
 OpenCode is the first integration candidate to investigate:
 
 - active recall already works through OpenCode's local MCP server support, so
@@ -294,6 +302,7 @@ in core:
 
 1. Review the in-progress macOS design, then implement Phase 3A.
 2. Continue through 3B-3D without duplicating the Go runtime in Swift.
-3. Run an OpenCode integration spike; ship only if MCP plus plugin lifecycle
+3. Release and document the validated Claude Code plugin.
+4. Run an OpenCode integration spike; ship only if MCP plus plugin lifecycle
    events provide a clear passive-memory improvement.
-4. Expand other agents or providers only from demonstrated demand.
+5. Expand other agents or providers only from demonstrated demand.

@@ -1,0 +1,1 @@
+{"mcpServers":{"paxm":{"command":"sh","args":["${CLAUDE_PLUGIN_ROOT}/scripts/paxm-mcp.sh"]}}}

@@ -142,8 +142,9 @@ type AgentIntegrationConfig struct {
 }
 
 const (
-	IntegrationOwnerPaxm        = "paxm"
-	IntegrationOwnerCodexPlugin = "codex-plugin"
+	IntegrationOwnerPaxm         = "paxm"
+	IntegrationOwnerCodexPlugin  = "codex-plugin"
+	IntegrationOwnerClaudePlugin = "claude-plugin"
 )
 
 type ActiveRecallConfig struct {
@@ -577,10 +578,16 @@ func Validate(cfg Config) error {
 	}
 	for name, agent := range cfg.Agents {
 		owner := strings.TrimSpace(strings.ToLower(agent.Integration.Owner))
-		if owner == "" || owner == IntegrationOwnerPaxm || owner == IntegrationOwnerCodexPlugin {
+		if owner == "" || owner == IntegrationOwnerPaxm || owner == IntegrationOwnerCodexPlugin || owner == IntegrationOwnerClaudePlugin {
+			if owner == IntegrationOwnerCodexPlugin && name != "codex" {
+				return fmt.Errorf("agent %q cannot use integration owner %q", name, owner)
+			}
+			if owner == IntegrationOwnerClaudePlugin && name != "claude" {
+				return fmt.Errorf("agent %q cannot use integration owner %q", name, owner)
+			}
 			continue
 		}
-		return fmt.Errorf("agent %q has invalid integration owner %q; expected paxm or codex-plugin", name, agent.Integration.Owner)
+		return fmt.Errorf("agent %q has invalid integration owner %q; expected paxm, codex-plugin, or claude-plugin", name, agent.Integration.Owner)
 	}
 
 	recallNames := sortedKeys(cfg.RecallProfiles)
