@@ -1,8 +1,11 @@
 package telemetry
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +75,108 @@ func TestRecorderRotatesEventLogsAndKeepsMetrics(t *testing.T) {
 	}
 	if summary.Storage.TotalBytes == 0 || summary.Storage.MaxFiles != 2 {
 		t.Fatalf("unexpected storage summary: %#v", summary.Storage)
+	}
+}
+
+func TestRecorderTailEventsReadsAcrossRotatedLogs(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	dir := t.TempDir()
+	recorder := NewRecorder(config.TelemetryConfig{
+		Enabled:           &enabled,
+		Dir:               dir,
+		EventsFile:        "events.jsonl",
+		MetricsFile:       "metrics.json",
+		MaxEventFileBytes: 180,
+		MaxEventFiles:     4,
+		RetentionDays:     7,
+	}, filepath.Join(dir, "config.yaml"))
+	for i := 1; i <= 6; i++ {
+		if err := recorder.Record(Event{
+			Time:    time.Date(2026, 7, 10, 10, i, 0, 0, time.UTC),
+			Kind:    "test",
+			Command: "event-" + strconv.Itoa(i),
+			Success: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events, err := recorder.TailEvents(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("TailEvents() returned %d events: %#v", len(events), events)
+	}
+	for i, want := range []string{"event-4", "event-5", "event-6"} {
+		if events[i].Command != want {
+			t.Fatalf("TailEvents()[%d].Command = %q, want %q", i, events[i].Command, want)
+		}
+	}
+}
+
+func TestRecorderFollowEventsStreamsAppendAndRotation(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	dir := t.TempDir()
+	recorder := NewRecorder(config.TelemetryConfig{
+		Enabled:           &enabled,
+		Dir:               dir,
+		EventsFile:        "events.jsonl",
+		MetricsFile:       "metrics.json",
+		MaxEventFileBytes: 220,
+		MaxEventFiles:     4,
+		RetentionDays:     7,
+	}, filepath.Join(dir, "config.yaml"))
+	if err := recorder.Record(Event{Kind: "test", Command: "initial", Success: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commands := make(chan string, 4)
+	done := make(chan error, 1)
+	go func() {
+		done <- recorder.FollowEvents(ctx, 1, 100*time.Millisecond, func(event Event) error {
+			commands <- event.Command
+			return nil
+		})
+	}()
+	waitCommand := func(want string) {
+		t.Helper()
+		select {
+		case got := <-commands:
+			if got != want {
+				t.Fatalf("follow command = %q, want %q", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for follow command %q", want)
+		}
+	}
+	waitCommand("initial")
+	if err := recorder.Record(Event{Kind: "test", Command: "appended", Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitCommand("appended")
+	if err := recorder.Record(Event{Kind: "test", Command: "rotation-one", Success: false, Error: strings.Repeat("x", 180)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Record(Event{Kind: "test", Command: "rotation-two", Success: false, Error: strings.Repeat("y", 180)}); err != nil {
+		t.Fatal(err)
+	}
+	waitCommand("rotation-one")
+	waitCommand("rotation-two")
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FollowEvents did not stop after cancellation")
 	}
 }
 

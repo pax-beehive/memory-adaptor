@@ -143,6 +143,19 @@ paxm history --days 7
 paxm history --days 7 --json
 ```
 
+Use logs when aggregate history is not enough and the user wants recent event
+details or live debugging:
+
+```bash
+paxm logs --tail 100
+paxm logs --tail 100 --json
+paxm logs --tail 0 --follow
+```
+
+Prefer a bounded tail. Use `--follow` only for an explicit live-monitoring task,
+and stop it when that task is complete. Raw logs are local CLI data; there is no
+MCP logs tool.
+
 Use this when the user asks whether passive recall fired, why a memory was not recalled, which providers were read or written, or how often agents are using memory.
 
 ## Operating Rules
