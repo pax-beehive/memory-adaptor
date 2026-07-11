@@ -88,6 +88,9 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if !reflect.DeepEqual(passive.Tiers, []string{"ltm"}) {
 		t.Fatalf("passive recall should read LTM only: %#v", passive)
 	}
+	if len(passive.Providers) != 1 || passive.Providers[0].Timeout != "250ms" {
+		t.Fatalf("passive providers should have a tight timeout: %#v", passive.Providers)
+	}
 	initialProfile := cfg.RecallProfiles["passive_initial"]
 	if initialProfile.MaxResults != 5 || initialProfile.Thresholds.MinRelevance != 0.35 || initialProfile.Thresholds.MinScore != 0.35 {
 		t.Fatalf("unexpected initial passive profile: %#v", initialProfile)
@@ -96,7 +99,7 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 		t.Fatalf("initial passive recall should read LTM only: %#v", initialProfile)
 	}
 	hook := cfg.Agents["codex"].Hooks["user_input"].Recall
-	if hook.Profile != "passive" || hook.MaxResults != 2 {
+	if hook.Profile != "passive" || hook.MaxResults != 2 || hook.Timeout != "800ms" {
 		t.Fatalf("user_input hook should use passive profile: %#v", hook)
 	}
 	if hook.Insertion.MinScore != 0.8 || hook.Insertion.MaxItems != 2 || !hook.Insertion.RequireQueryTerms {

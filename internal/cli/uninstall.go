@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pax-beehive/memory-adaptor/internal/config"
+	"github.com/pax-beehive/paxm/internal/config"
 )
 
 func (r runner) runUninstall(args []string) error {

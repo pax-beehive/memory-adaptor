@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/pax-beehive/memory-adaptor/internal/config"
-	"github.com/pax-beehive/memory-adaptor/internal/memory"
+	"github.com/pax-beehive/paxm/internal/config"
+	"github.com/pax-beehive/paxm/internal/memory"
 )
 
 const (
@@ -32,9 +32,11 @@ type RecallInput struct {
 }
 
 type RecallResult struct {
-	Query          string                 `json:"query"`
-	Hits           []memory.MemoryHit     `json:"hits"`
-	ProviderErrors []memory.ProviderError `json:"provider_errors,omitempty"`
+	Query           string                  `json:"query"`
+	Hits            []memory.MemoryHit      `json:"hits"`
+	ProviderErrors  []memory.ProviderError  `json:"provider_errors,omitempty"`
+	ProviderRecalls []memory.ProviderRecall `json:"provider_recalls,omitempty"`
+	TimedOut        bool                    `json:"timed_out,omitempty"`
 }
 
 type IngestInput struct {
@@ -108,9 +110,10 @@ func (s *Service) Recall(ctx context.Context, input RecallInput) (RecallResult, 
 		Metadata: input.Meta,
 	}, policy)
 	result := RecallResult{
-		Query:          query,
-		Hits:           searchResult.Hits,
-		ProviderErrors: searchResult.ProviderErrors,
+		Query:           query,
+		Hits:            searchResult.Hits,
+		ProviderErrors:  searchResult.ProviderErrors,
+		ProviderRecalls: searchResult.ProviderRecalls,
 	}
 	return result, err
 }
@@ -263,7 +266,13 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 	if limit == 0 {
 		limit = recallCfg.MaxResults
 	}
-	recall, err := s.Recall(ctx, RecallInput{
+	recallCtx := ctx
+	cancel := func() {}
+	if timeout, parseErr := time.ParseDuration(recallCfg.Timeout); parseErr == nil && timeout > 0 {
+		recallCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
+	defer cancel()
+	recall, err := s.Recall(recallCtx, RecallInput{
 		Query:   query,
 		Profile: recallCfg.Profile,
 		Limit:   limit,
@@ -272,6 +281,10 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 	recall.Hits = filterHookInsertionHits(recall.Hits, query, recallCfg.Insertion)
 	result.Query = recall.Query
 	result.Recall = &recall
+	if errors.Is(err, context.DeadlineExceeded) && errors.Is(recallCtx.Err(), context.DeadlineExceeded) {
+		result.Recall.TimedOut = true
+		return result, nil
+	}
 	return result, err
 }
 
@@ -288,6 +301,9 @@ func effectiveHookRecallConfig(recall config.HookRecallConfig, event HookEvent) 
 	}
 	if initial.MaxResults != 0 {
 		recall.MaxResults = initial.MaxResults
+	}
+	if initial.Timeout != "" {
+		recall.Timeout = initial.Timeout
 	}
 	if initial.Insertion != (config.HookInsertionConfig{}) {
 		recall.Insertion = initial.Insertion
@@ -417,6 +433,9 @@ func toMemoryRoutes(routes []config.ProviderRouteConfig) []memory.ProviderRoute 
 			Name:     route.Name,
 			Required: route.Required,
 			Weight:   route.Weight,
+		}
+		if timeout, err := time.ParseDuration(route.Timeout); err == nil {
+			memoryRoute.Timeout = timeout
 		}
 		if route.Thresholds != nil {
 			memoryRoute.MinRelevance = route.Thresholds.MinRelevance

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
-	"github.com/pax-beehive/memory-adaptor/internal/config"
+	"github.com/pax-beehive/paxm/internal/capturequeue"
+	"github.com/pax-beehive/paxm/internal/config"
 )
 
 type captureDeliveryWorker struct {

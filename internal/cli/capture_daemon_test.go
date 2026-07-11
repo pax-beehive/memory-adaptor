@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pax-beehive/memory-adaptor/internal/adapters"
-	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
-	"github.com/pax-beehive/memory-adaptor/internal/config"
-	"github.com/pax-beehive/memory-adaptor/internal/facade"
+	"github.com/pax-beehive/paxm/internal/adapters"
+	"github.com/pax-beehive/paxm/internal/capturequeue"
+	"github.com/pax-beehive/paxm/internal/config"
+	"github.com/pax-beehive/paxm/internal/facade"
 )
 
 func TestHookDaemonLockAllowsOnlyOneOwnerAndRecoversAfterRelease(t *testing.T) {

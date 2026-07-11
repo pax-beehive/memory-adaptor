@@ -60,7 +60,7 @@ install.sh
 
 Each archive contains the `paxm` binary and the project README.
 `install.sh` is uploaded as a release asset so users can install with
-`curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh | bash`.
+`curl -fsSL https://github.com/pax-beehive/paxm/releases/latest/download/install.sh | bash`.
 
 ## Versioning
 
@@ -84,7 +84,7 @@ For Windows assets, use `unzip` instead of `tar`.
 Smoke test the installer against the release:
 
 ```bash
-curl -fsSL https://github.com/pax-beehive/memory-adaptor/releases/latest/download/install.sh -o /tmp/paxm-install.sh
+curl -fsSL https://github.com/pax-beehive/paxm/releases/latest/download/install.sh -o /tmp/paxm-install.sh
 PAXM_INSTALL_DIR=/tmp/paxm-install-smoke bash /tmp/paxm-install.sh
 /tmp/paxm-install-smoke/paxm version
 ```

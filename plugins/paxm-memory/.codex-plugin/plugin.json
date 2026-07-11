@@ -7,7 +7,7 @@
     "url": "https://paxtech.net"
   },
   "homepage": "https://paxtech.net",
-  "repository": "https://github.com/pax-beehive/memory-adaptor",
+  "repository": "https://github.com/pax-beehive/paxm",
   "license": "Apache-2.0",
   "keywords": ["memory", "agents", "codex", "recall", "local-first"],
   "skills": "./skills/",

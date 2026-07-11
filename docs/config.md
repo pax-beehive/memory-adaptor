@@ -62,6 +62,7 @@ recall_profiles:
       - name: sqlite
         required: true
         weight: 1.0
+        timeout: 250ms
     max_results: 2
     thresholds:
       min_relevance: 0.75
@@ -76,6 +77,7 @@ recall_profiles:
       - name: sqlite
         required: true
         weight: 1.0
+        timeout: 250ms
     max_results: 5
     thresholds:
       min_relevance: 0.35
@@ -128,6 +130,7 @@ agents:
           profile: passive
           query_template: "{{ .prompt }}"
           max_results: 2
+          timeout: 800ms
           output: markdown
           insertion:
             min_score: 0.8
@@ -404,6 +407,13 @@ Threshold fields:
 - `min_relevance`: provider-normalized relevance threshold before merge.
 - `min_score`: final score threshold after weight and ranking boosts.
 
+Recall timeout fields:
+
+- A provider route `timeout` limits that downstream independently. Passive
+  profiles default to `250ms`, so one slow provider cannot delay healthy hits.
+- A hook recall `timeout` limits the complete passive recall operation. It
+  defaults to `800ms` and returns any partial hits collected before the budget.
+
 Example provider-specific passive recall thresholds:
 
 ```yaml
@@ -413,9 +423,11 @@ recall_profiles:
       - name: sqlite
         required: true
         weight: 1
+        timeout: 250ms
       - name: mem0_team
         required: false
         weight: 1
+        timeout: 250ms
         thresholds:
           min_relevance: 0.45
           min_score: 0.45
@@ -655,7 +667,12 @@ Files:
 - Agent metrics aggregate passive hook recall and write counts by hook target,
   such as `codex`.
 - Provider metrics aggregate recall calls, write calls, hits, refs, and provider
-  errors by provider name.
+  errors by provider name. Recall telemetry also records each provider's
+  duration, configured timeout, outcome, and bulkhead state. Aggregates expose
+  average and histogram-based p95 recall latency, timeout count, and bulkhead
+  skip count.
+- Passive hook events set `recall_timed_out` when the overall recall budget is
+  reached, independently of per-provider timeout outcomes.
 
 Bounds:
 
