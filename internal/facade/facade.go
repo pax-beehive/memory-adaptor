@@ -63,10 +63,19 @@ type HookEvent struct {
 	Event     string            `json:"event,omitempty"`
 	Query     string            `json:"query,omitempty"`
 	Prompt    string            `json:"prompt,omitempty"`
+	Assistant string            `json:"assistant,omitempty"`
+	Messages  []HookMessage     `json:"messages,omitempty"`
 	Workspace string            `json:"workspace,omitempty"`
 	Limit     int               `json:"limit,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 	Raw       json.RawMessage   `json:"-"`
+}
+
+type HookMessage struct {
+	Role    string `json:"role,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Content string `json:"content,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
 type HookResult struct {
@@ -423,8 +432,11 @@ func renderHookTemplate(queryTemplate string, event HookEvent) (string, error) {
 		"event":     event.Event,
 		"query":     event.Query,
 		"prompt":    event.Prompt,
+		"assistant": event.Assistant,
+		"messages":  event.Messages,
 		"workspace": event.Workspace,
 		"metadata":  event.Metadata,
+		"safe_text": safeHookText(event),
 		"raw_json":  strings.TrimSpace(string(event.Raw)),
 	}
 	var buf bytes.Buffer
@@ -432,6 +444,77 @@ func renderHookTemplate(queryTemplate string, event HookEvent) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(buf.String()), nil
+}
+
+func safeHookText(event HookEvent) string {
+	label := hookTargetLabel(event.Target)
+	switch strings.TrimSpace(event.Event) {
+	case "session_start":
+		if strings.TrimSpace(event.Workspace) == "" {
+			return label + " session started."
+		}
+		return label + " session started.\nWorkspace: " + strings.TrimSpace(event.Workspace)
+	case "user_input":
+		if strings.TrimSpace(event.Prompt) == "" {
+			return ""
+		}
+		return label + " user input:\n" + strings.TrimSpace(event.Prompt)
+	case "turn_end":
+		if assistant := strings.TrimSpace(event.Assistant); assistant != "" {
+			return label + " assistant response:\n" + assistant
+		}
+		if messages := formatHookMessages(event.Messages); messages != "" {
+			return label + " turn messages:\n" + messages
+		}
+		return ""
+	default:
+		if strings.TrimSpace(event.Prompt) == "" {
+			return ""
+		}
+		eventName := strings.TrimSpace(event.Event)
+		if eventName == "" {
+			eventName = "hook event"
+		}
+		return label + " " + eventName + ":\n" + strings.TrimSpace(event.Prompt)
+	}
+}
+
+func hookTargetLabel(target string) string {
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "claude":
+		return "Claude Code"
+	case "pi":
+		return "Pi"
+	case "codex", "":
+		return "Codex"
+	default:
+		return strings.TrimSpace(target)
+	}
+}
+
+func formatHookMessages(messages []HookMessage) string {
+	var lines []string
+	for _, message := range messages {
+		role := strings.ToLower(strings.TrimSpace(message.Role))
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		text := strings.TrimSpace(firstNonEmpty(message.Text, message.Content))
+		if text == "" {
+			continue
+		}
+		lines = append(lines, hookMessageRoleLabel(role)+": "+text)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func hookMessageRoleLabel(role string) string {
+	switch role {
+	case "assistant":
+		return "Assistant"
+	default:
+		return "User"
+	}
 }
 
 func copyMetadata(metadata map[string]string) map[string]string {

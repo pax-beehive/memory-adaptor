@@ -116,10 +116,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Claude Code session started.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: session_start
           buffer:
             enabled: true
@@ -147,11 +144,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Claude Code user input:
-            {{ .prompt }}
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: user_input
           buffer:
             enabled: true
@@ -162,10 +155,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Claude Code turn ended.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: turn_end
           buffer:
             enabled: true
@@ -184,10 +174,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Session started.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: session_start
           buffer:
             enabled: true
@@ -215,11 +202,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            User input:
-            {{ .prompt }}
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: user_input
           buffer:
             enabled: true
@@ -230,10 +213,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Turn ended.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: turn_end
           buffer:
             enabled: true
@@ -270,10 +250,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Pi turn ended.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: turn_end
           buffer:
             enabled: true
@@ -506,8 +483,9 @@ Code use the same internal event names:
 
 Claude Code supplies `last_assistant_message` in the raw `Stop` payload, so the
 default `turn_end` template sends the final assistant response to the configured
-write providers along with the rest of the event. Claude Code receives admitted
-recall hits as Markdown context from the synchronous `UserPromptSubmit` hook.
+write providers without storing the rest of the raw runtime event. Claude Code
+receives admitted recall hits as Markdown context from the synchronous
+`UserPromptSubmit` hook.
 
 For Pi, `turn_end` maps to Pi's runtime `turn_end` event and receives buffered
 Pi messages from the generated extension.
@@ -517,20 +495,24 @@ Hook write fields:
 - `enabled`: whether this hook produces a memory write item.
 - `profile`: write profile used when the item is flushed. Built-in passive
   hooks default to `ltm`.
-- `template`: Go template rendered from hook data. Available keys include
-  `.target`, `.event`, `.prompt`, `.query`, `.workspace`, `.metadata`, and
-  `.raw_json`.
+- `template`: Go template rendered from hook data. Built-in defaults use
+  `.safe_text`, a filtered view of user input, visible assistant output, Pi
+  turn messages, and workspace context. Available keys also include `.target`,
+  `.event`, `.prompt`, `.assistant`, `.messages`, `.query`, `.workspace`,
+  `.metadata`, and `.raw_json`. Use `.raw_json` only for explicit custom debug
+  capture; it is not part of the default long-term memory templates.
 - `mode`: descriptive write mode for config readability.
 - `buffer.enabled`: when true, queue this hook item in the in-memory daemon.
 - `buffer.flush`: when true, flush the current in-memory daemon buffer after
   appending this item.
 - `buffer.flush_count`: flush after the buffer reaches this many items.
 
-Paxm writes the rendered template output as `MemoryItem.text`. It does not run a
-shared extraction step before writing. Providers own any extraction behavior:
-SQLite stores the text directly, Zep receives it as a text episode, Mem0
-receives it as a `role=user` message and may infer memories server-side, and
-JSON-RPC plugins decide their own extraction or storage behavior.
+Paxm writes the rendered template output as `MemoryItem.text`. The default
+template stores semantic hook content instead of raw runtime events. Providers
+own any additional extraction behavior: SQLite stores the text directly, Zep
+receives it as a text episode, Mem0 receives it as a `role=user` message and may
+infer memories server-side, and JSON-RPC plugins decide their own extraction or
+storage behavior.
 
 For providers without native tier or TTL fields, paxm stores `paxm_tier` and
 `paxm_expires_at` metadata and filters results in the core router.

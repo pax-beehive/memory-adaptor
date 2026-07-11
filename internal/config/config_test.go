@@ -112,6 +112,16 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if !claudeTurnEnd.Enabled || claudeTurnEnd.Mode != "turn_end" || !claudeTurnEnd.Buffer.Flush {
 		t.Fatalf("unexpected Claude Code turn-end defaults: %#v", claudeTurnEnd)
 	}
+	for agentName, agent := range cfg.Agents {
+		for eventName, hook := range agent.Hooks {
+			if strings.Contains(hook.Write.Template, "raw_json") {
+				t.Fatalf("%s %s default write template should not store raw hook JSON: %q", agentName, eventName, hook.Write.Template)
+			}
+			if hook.Write.Enabled && hook.Write.Template != defaultHookWriteTemplate {
+				t.Fatalf("%s %s default write template = %q, want %q", agentName, eventName, hook.Write.Template, defaultHookWriteTemplate)
+			}
+		}
+	}
 	piTurnEnd := cfg.Agents["pi"].Hooks["turn_end"].Write
 	if !cfg.Agents["pi"].Hooks["user_input"].Recall.Enabled {
 		t.Fatalf("pi passive recall should be available when the agent is selected: %#v", cfg.Agents["pi"])

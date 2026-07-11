@@ -1015,6 +1015,49 @@ func enrichHookEventFromRaw(event *facade.HookEvent, raw []byte) {
 			event.Metadata[key] = value
 		}
 	}
+	if event.Assistant == "" {
+		for _, key := range []string{"last_assistant_message", "assistant", "assistant_message", "response", "output"} {
+			if value, ok := object[key].(string); ok && strings.TrimSpace(value) != "" {
+				event.Assistant = value
+				break
+			}
+		}
+	}
+	if len(event.Messages) == 0 {
+		event.Messages = hookMessagesFromRaw(object["messages"])
+	}
+}
+
+func hookMessagesFromRaw(value any) []facade.HookMessage {
+	rawMessages, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	messages := make([]facade.HookMessage, 0, len(rawMessages))
+	for _, rawMessage := range rawMessages {
+		object, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		message := facade.HookMessage{
+			Role:    stringField(object, "role"),
+			Text:    stringField(object, "text"),
+			Content: stringField(object, "content"),
+			Source:  stringField(object, "source"),
+		}
+		if strings.TrimSpace(message.Role) == "" || strings.TrimSpace(firstNonEmpty(message.Text, message.Content)) == "" {
+			continue
+		}
+		messages = append(messages, message)
+	}
+	return messages
+}
+
+func stringField(object map[string]any, key string) string {
+	if value, ok := object[key].(string); ok {
+		return value
+	}
+	return ""
 }
 
 func bytesTrimSpace(bytes []byte) []byte {
@@ -2372,7 +2415,6 @@ function flushTurn(triggerEvent: string, event: any, ctx: any): void {
     source: "pi",
     trigger_event: triggerEvent,
     messages,
-    raw_event: event,
     metadata: {
       pi_event: triggerEvent,
       message_count: String(messages.length),

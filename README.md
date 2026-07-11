@@ -286,10 +286,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Session started.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: session_start
           buffer:
             enabled: true
@@ -317,11 +314,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            User input:
-            {{ .prompt }}
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: user_input
           buffer:
             enabled: true
@@ -332,10 +325,7 @@ agents:
           enabled: true
           profile: ltm
           template: |
-            Turn ended.
-
-            Event:
-            {{ .raw_json }}
+            {{ .safe_text }}
           mode: turn_end
           buffer:
             enabled: true
@@ -535,7 +525,8 @@ Claude Code `SessionStart`, `UserPromptSubmit`, and `Stop` map to paxm
 `session_start`, `user_input`, and `turn_end`. Recall is returned as plain
 Markdown from `UserPromptSubmit`, which Claude Code adds to the prompt context.
 The `Stop` payload includes Claude Code's `last_assistant_message`; paxm writes
-that event and flushes the buffered session/user/turn evidence.
+that visible assistant text and flushes the buffered session/user/turn evidence
+without storing the rest of the raw runtime event by default.
 
 For Pi, setup writes paxm hook shims and registers a Pi extension:
 

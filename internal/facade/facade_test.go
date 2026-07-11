@@ -271,6 +271,12 @@ func TestUserInputHookConsolidationIgnoresVolatileRawEventFields(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("second HookWriteItem() = %#v, %v, %v", secondItem, ok, err)
 	}
+	if strings.Contains(firstItem.Text, "session-a") || strings.Contains(firstItem.Text, "raw_json") {
+		t.Fatalf("default hook write leaked raw event content: %q", firstItem.Text)
+	}
+	if !strings.Contains(firstItem.Text, "Codex user input:") || !strings.Contains(firstItem.Text, "Remember that releases require binary verification.") {
+		t.Fatalf("default hook write did not preserve safe prompt text: %q", firstItem.Text)
+	}
 	first, err := service.Ingest(context.Background(), firstItem)
 	if err != nil {
 		t.Fatal(err)
@@ -284,10 +290,74 @@ func TestUserInputHookConsolidationIgnoresVolatileRawEventFields(t *testing.T) {
 	}
 }
 
+func TestDefaultHookWriteTextFiltersRuntimePayload(t *testing.T) {
+	t.Parallel()
+
+	service := newSQLiteServiceForAgent(t, "claude")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target:    "claude",
+		Event:     "turn_end",
+		Assistant: "The release must be verified with the downloaded binary.",
+		Workspace: "/tmp/project",
+		Raw:       json.RawMessage(`{"last_assistant_message":"The release must be verified with the downloaded binary.","tool_use":{"name":"Read","input":{"file":"/secret/path"}},"thinking":"private chain of thought","session_id":"volatile"}`),
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	if !strings.Contains(item.Text, "Claude Code assistant response:") || !strings.Contains(item.Text, "downloaded binary") {
+		t.Fatalf("safe hook text lost assistant content: %q", item.Text)
+	}
+	for _, forbidden := range []string{"tool_use", "/secret/path", "private chain", "volatile"} {
+		if strings.Contains(item.Text, forbidden) {
+			t.Fatalf("safe hook text leaked %q: %q", forbidden, item.Text)
+		}
+	}
+}
+
+func TestDefaultPiTurnEndWriteUsesFilteredMessages(t *testing.T) {
+	t.Parallel()
+
+	service := newSQLiteServiceForAgent(t, "pi")
+	item, ok, err := service.HookWriteItem(HookEvent{
+		Target: "pi",
+		Event:  "turn_end",
+		Messages: []HookMessage{
+			{Role: "user", Text: "Remember the setup boundary."},
+			{Role: "assistant", Text: "Setup owns hook installation."},
+			{Role: "tool", Text: "large tool output"},
+		},
+		Raw: json.RawMessage(`{"messages":[{"role":"user","text":"Remember the setup boundary."},{"role":"assistant","text":"Setup owns hook installation."},{"role":"tool","text":"large tool output"}],"raw_event":{"debug":true}}`),
+	})
+	if err != nil || !ok {
+		t.Fatalf("HookWriteItem() = %#v, %v, %v", item, ok, err)
+	}
+	if !strings.Contains(item.Text, "User: Remember the setup boundary.") || !strings.Contains(item.Text, "Assistant: Setup owns hook installation.") {
+		t.Fatalf("safe hook text lost visible messages: %q", item.Text)
+	}
+	if strings.Contains(item.Text, "large tool output") || strings.Contains(item.Text, "raw_event") {
+		t.Fatalf("safe hook text leaked non-message payload: %q", item.Text)
+	}
+}
+
 func newSQLiteService(t *testing.T) *Service {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.DefaultConfig(configPath)
+	return newSQLiteServiceWithConfig(t, cfg)
+}
+
+func newSQLiteServiceForAgent(t *testing.T, agentName string) *Service {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	agent := cfg.Agents[agentName]
+	agent.Enabled = true
+	cfg.Agents[agentName] = agent
+	return newSQLiteServiceWithConfig(t, cfg)
+}
+
+func newSQLiteServiceWithConfig(t *testing.T, cfg config.Config) *Service {
+	t.Helper()
 	provider, err := sqliteadapter.New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
 	if err != nil {
 		t.Fatal(err)

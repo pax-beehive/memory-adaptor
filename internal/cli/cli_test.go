@@ -278,6 +278,9 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 			t.Fatalf("pi extension missing %q: %s", expected, extensionText)
 		}
 	}
+	if strings.Contains(extensionText, "raw_event") {
+		t.Fatalf("pi extension should not forward raw runtime events into paxm payloads: %s", extensionText)
+	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -619,6 +622,35 @@ func TestInternalHookDoesNotBufferWhenHookWriteDisabled(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"target": "pi"`) {
 		t.Fatalf("unexpected hook output: %s", stdout.String())
+	}
+}
+
+func TestDecodeHookEventExtractsSafeWriteFields(t *testing.T) {
+	event, err := decodeHookEvent([]byte(`{
+		"session_id": "volatile-session",
+		"last_assistant_message": "Final answer only.",
+		"messages": [
+			{"role": "user", "text": "visible prompt"},
+			{"role": "assistant", "text": "visible answer"},
+			{"role": "tool", "text": "tool output"}
+		],
+		"tool_use": {"name": "Read"},
+		"thinking": "private"
+	}`), "claude", "turn_end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Assistant != "Final answer only." {
+		t.Fatalf("assistant = %q", event.Assistant)
+	}
+	if len(event.Messages) != 3 || event.Messages[0].Text != "visible prompt" || event.Messages[2].Role != "tool" {
+		t.Fatalf("messages not decoded: %#v", event.Messages)
+	}
+	if event.Metadata["session_id"] != "volatile-session" {
+		t.Fatalf("metadata not preserved: %#v", event.Metadata)
+	}
+	if strings.TrimSpace(string(event.Raw)) == "" {
+		t.Fatal("raw event should remain available for explicit custom templates")
 	}
 }
 

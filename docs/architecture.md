@@ -232,15 +232,19 @@ groups are preserved and paxm command handlers are deduplicated by command path.
 The Claude `user_input` shim emits Markdown because stdout from
 `UserPromptSubmit` is injected into Claude's context. The Claude `turn_end` shim
 receives the native `Stop` event, including `last_assistant_message`, and uses it
-as write evidence without blocking Claude from stopping.
+as filtered write evidence without storing the full raw event or blocking Claude
+from stopping.
 
 ## Hook Write Capture
 
 Paxm does not run a shared memory-extraction or summarization step before
 writing. Hook writes render the configured `hooks.*.write.template` into a text
 payload, attach hook metadata, apply deterministic LTM admission when applicable,
-and route that `MemoryItem` to the configured write profile. The provider decides
-what to do with that text:
+and route that `MemoryItem` to the configured write profile. Built-in templates
+use filtered `safe_text` rather than raw hook JSON, so long-term memory stores
+user input, visible assistant output, or buffered Pi turn messages instead of
+tool traffic, hidden reasoning, or runtime event structures. The provider
+decides what to do with that text:
 
 - `sqlite` stores the rendered text directly.
 - `zep` writes the rendered text as a text episode and leaves graph extraction

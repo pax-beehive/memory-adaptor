@@ -42,6 +42,7 @@ const (
 	defaultTelemetryMaxEventFiles    = 3
 	defaultTelemetryRetentionDays    = 30
 	defaultTelemetryQueryPreview     = 80
+	defaultHookWriteTemplate         = "{{ .safe_text }}"
 )
 
 type Config struct {
@@ -300,7 +301,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "Claude Code session started.\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "session_start",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
@@ -325,7 +326,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "Claude Code user input:\n{{ .prompt }}\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "user_input",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
@@ -337,7 +338,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "Claude Code turn ended.\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "turn_end",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
@@ -360,7 +361,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "Session started.\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "session_start",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
@@ -385,7 +386,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "User input:\n{{ .prompt }}\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "user_input",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
@@ -397,7 +398,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "Turn ended.\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "turn_end",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
@@ -435,7 +436,7 @@ func DefaultConfig(configPath string) Config {
 						Write: HookWriteConfig{
 							Enabled:  true,
 							Profile:  "ltm",
-							Template: "Pi turn ended.\n\nEvent:\n{{ .raw_json }}",
+							Template: defaultHookWriteTemplate,
 							Mode:     "turn_end",
 							Buffer: HookBufferConfig{
 								Enabled:    true,
