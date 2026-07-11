@@ -77,6 +77,10 @@ Hook passive recall:
 Local history:
   paxm history --days 7
 
+Local telemetry logs:
+  paxm logs --tail 50
+  paxm logs --follow
+
 Historical session backfill:
   paxm backfill scan --agent codex --before 2026-07-09
   paxm backfill run --agent codex --provider mem0-company --background
@@ -127,6 +131,7 @@ go build -o /tmp/paxm ./cmd/paxm
 /tmp/paxm remember --profile stm --text "paxm supports hook passive recall"
 /tmp/paxm recall --query "passive recall"
 /tmp/paxm history --days 7
+/tmp/paxm logs --tail 20
 ```
 
 For a project-local config during development:
@@ -457,6 +462,13 @@ down passive hook recall/write counts by agent, and provider recall/write counts
 by provider. Telemetry uses a bounded rolling JSONL event log plus a compact
 metrics JSON file. By default it records query length and a query hash, not raw
 query text.
+
+`paxm logs` reads the raw rolling event log across retained backups and the
+active file. It prints the most recent 50 events in a compact human-readable
+format by default. Use `--tail N` to change the initial window, `--json` for
+JSONL, and `--follow` to stream new events across active-file rotation until
+Ctrl-C. `--tail 0 --follow` starts with new events only. This local debugging
+surface is intentionally not exposed through MCP.
 
 `paxm backfill` imports local sessions created before passive integration into
 one exact provider instance. Built-in readers support Codex, Claude Code, and

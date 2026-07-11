@@ -606,6 +606,18 @@ Bounds:
   `events.jsonl.2`.
 - `retention_days`: number of daily metric buckets to keep in `metrics_file`.
 
+Read telemetry through:
+
+```bash
+paxm history --days 7          # aggregate metrics
+paxm logs --tail 100           # recent raw events across rotated files
+paxm logs --tail 0 --follow    # new events only, following rotation
+paxm logs --tail 100 --json    # raw JSONL output
+```
+
+`paxm logs --follow` stops on Ctrl-C. Raw logs remain a local CLI surface and
+are not exposed by `paxm mcp serve`.
+
 Privacy:
 
 - Query text is not stored by default. Telemetry stores query length and a

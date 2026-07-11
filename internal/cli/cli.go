@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -130,6 +131,8 @@ func (r runner) run(args []string) error {
 		return r.runRemember(args[1:])
 	case "history":
 		return r.runHistory(args[1:])
+	case "logs":
+		return r.runLogs(args[1:])
 	case "backfill":
 		return r.runBackfill(args[1:])
 	case "mcp":
@@ -1118,6 +1121,47 @@ func (r runner) runHistory(args []string) error {
 	return nil
 }
 
+func (r runner) runLogs(args []string) error {
+	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
+	fs.SetOutput(r.stderr)
+	tail := fs.Int("tail", 50, "number of recent events")
+	follow := fs.Bool("follow", false, "follow new events")
+	jsonOut := fs.Bool("json", false, "write JSONL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *tail < 0 {
+		return errors.New("logs tail must be non-negative")
+	}
+	cfg, err := config.Load(r.configFile())
+	if err != nil {
+		return err
+	}
+	recorder := telemetry.NewRecorder(cfg.Telemetry, r.configFile())
+	emit := func(event telemetry.Event) error {
+		if *jsonOut {
+			return json.NewEncoder(r.stdout).Encode(event)
+		}
+		writeLogEvent(r.stdout, event)
+		return nil
+	}
+	if *follow {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return recorder.FollowEvents(ctx, *tail, 250*time.Millisecond, emit)
+	}
+	events, err := recorder.TailEvents(*tail)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r runner) loadRuntime() (config.Config, *facade.Service, error) {
 	rt, err := paxruntime.Load(r.configFile())
 	if err != nil {
@@ -1144,6 +1188,7 @@ func (r runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] recall --query TEXT [--limit N] [--json]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] remember --profile stm|ltm --text TEXT")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] history [--days N] [--json]")
+	fmt.Fprintln(r.stdout, "  paxm [--config PATH] logs [--tail N] [--follow] [--json]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill scan --agent AGENT [--before TIME]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill status --agent AGENT --provider NAME")
@@ -2877,6 +2922,60 @@ func writeHistorySummary(w io.Writer, summary telemetry.HistorySummary) {
 	writeNamedCounters(w, "by provider", []string{"provider", "recalls", "hits", "writes", "refs", "provider_errors"}, summary.Providers, func(counter telemetry.Counter) []string {
 		return []string{formatInt(counter.Recalls), formatInt(counter.Hits), formatInt(counter.Writes), formatInt(counter.Refs), formatInt(counter.ProviderErrors)}
 	})
+}
+
+func writeLogEvent(w io.Writer, event telemetry.Event) {
+	status := "OK"
+	if event.Skipped {
+		status = "SKIP"
+	} else if !event.Success {
+		status = "ERROR"
+	}
+	kind := firstNonEmpty(event.Kind, "event")
+	parts := []string{event.Time.UTC().Format(time.RFC3339), status, kind}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "command", value: event.Command},
+		{name: "source", value: event.Source},
+		{name: "target", value: event.Target},
+		{name: "hook_event", value: event.HookEvent},
+		{name: "profile", value: event.Profile},
+	} {
+		if strings.TrimSpace(field.value) != "" {
+			parts = append(parts, field.name+"="+formatLogValue(field.value))
+		}
+	}
+	for _, field := range []struct {
+		name  string
+		value int
+	}{
+		{name: "hits", value: event.HitCount},
+		{name: "inserted", value: event.InsertedCount},
+		{name: "items", value: event.ItemCount},
+		{name: "refs", value: event.RefCount},
+		{name: "flushed", value: event.Flushed},
+		{name: "provider_errors", value: len(event.ProviderErrorDetails)},
+	} {
+		if field.value > 0 {
+			parts = append(parts, field.name+"="+strconv.Itoa(field.value))
+		}
+	}
+	if event.DurationMS > 0 {
+		parts = append(parts, "duration_ms="+strconv.FormatInt(event.DurationMS, 10))
+	}
+	if event.Error != "" {
+		parts = append(parts, "error="+strconv.Quote(event.Error))
+	}
+	fmt.Fprintln(w, strings.Join(parts, " "))
+}
+
+func formatLogValue(value string) string {
+	if strings.ContainsAny(value, " \t\r\n\"") {
+		return strconv.Quote(value)
+	}
+	return value
 }
 
 func writeNamedCounters(w io.Writer, title string, headers []string, counters []telemetry.NamedCounter, values func(telemetry.Counter) []string) {

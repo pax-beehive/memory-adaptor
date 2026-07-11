@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -266,6 +268,228 @@ func (r *Recorder) History(days int) (HistorySummary, error) {
 	summary.HookEvents = sortedNamedCounters(hookEvents)
 	summary.Providers = sortedNamedCounters(providers)
 	return summary, nil
+}
+
+func (r *Recorder) TailEvents(limit int) ([]Event, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+	events := make([]Event, 0, limit)
+	for _, path := range r.eventPathsOldestFirst() {
+		fileEvents, err := readEventFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		for _, event := range fileEvents {
+			if len(events) == limit {
+				copy(events, events[1:])
+				events[len(events)-1] = event
+				continue
+			}
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (r *Recorder) FollowEvents(ctx context.Context, tail int, pollInterval time.Duration, emit func(Event) error) error {
+	if r == nil {
+		return nil
+	}
+	if emit == nil {
+		return errors.New("telemetry follow emit function is required")
+	}
+	if pollInterval <= 0 {
+		pollInterval = 250 * time.Millisecond
+	}
+	if err := os.MkdirAll(r.settings.Dir, 0o700); err != nil {
+		return err
+	}
+	unlock, err := lockDir(r.settings.Dir)
+	if err != nil {
+		return err
+	}
+	initial, initialErr := r.TailEvents(tail)
+	cursor := &eventCursor{}
+	cursorErr := cursor.open(r.eventsPath(), true)
+	unlock()
+	if initialErr != nil {
+		return initialErr
+	}
+	if cursorErr != nil {
+		return cursorErr
+	}
+	defer cursor.close()
+	for _, event := range initial {
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			events, err := cursor.poll(r.eventsPath())
+			if err != nil {
+				return err
+			}
+			for _, event := range events {
+				if err := emit(event); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+func (r *Recorder) eventPathsOldestFirst() []string {
+	paths := make([]string, 0, r.settings.MaxEventFiles)
+	for i := r.settings.MaxEventFiles - 1; i >= 1; i-- {
+		paths = append(paths, fmt.Sprintf("%s.%d", r.eventsPath(), i))
+	}
+	return append(paths, r.eventsPath())
+}
+
+func readEventFile(path string) ([]Event, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	if data[len(data)-1] != '\n' {
+		lastNewline := bytes.LastIndexByte(data, '\n')
+		if lastNewline < 0 {
+			return nil, nil
+		}
+		data = data[:lastNewline+1]
+	}
+	return decodeEventData(path, data)
+}
+
+func decodeEventData(path string, data []byte) ([]Event, error) {
+	lines := bytes.Split(data, []byte{'\n'})
+	events := make([]Event, 0, len(lines)-1)
+	for index, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var event Event
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, fmt.Errorf("decode telemetry event %s line %d: %w", path, index+1, err)
+		}
+		events = append(events, event)
+	}
+	return events, nil
+}
+
+type eventCursor struct {
+	file    *os.File
+	pending []byte
+}
+
+func (c *eventCursor) open(path string, seekEnd bool) error {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if seekEnd {
+		if _, err := file.Seek(0, io.SeekEnd); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	c.file = file
+	c.pending = nil
+	return nil
+}
+
+func (c *eventCursor) close() {
+	if c.file != nil {
+		_ = c.file.Close()
+		c.file = nil
+	}
+}
+
+func (c *eventCursor) poll(path string) ([]Event, error) {
+	events, err := c.readAvailable(path)
+	if err != nil {
+		return nil, err
+	}
+	pathInfo, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return events, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if c.file == nil {
+		if err := c.open(path, false); err != nil {
+			return nil, err
+		}
+		newEvents, err := c.readAvailable(path)
+		return append(events, newEvents...), err
+	}
+	currentInfo, err := c.file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	offset, err := c.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, err
+	}
+	if os.SameFile(currentInfo, pathInfo) {
+		if pathInfo.Size() >= offset {
+			return events, nil
+		}
+		if _, err := c.file.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		c.pending = nil
+		newEvents, err := c.readAvailable(path)
+		return append(events, newEvents...), err
+	}
+
+	c.close()
+	if err := c.open(path, false); err != nil {
+		return nil, err
+	}
+	newEvents, err := c.readAvailable(path)
+	return append(events, newEvents...), err
+}
+
+func (c *eventCursor) readAvailable(path string) ([]Event, error) {
+	if c.file == nil {
+		return nil, nil
+	}
+	data, err := io.ReadAll(c.file)
+	if err != nil {
+		return nil, err
+	}
+	data = append(c.pending, data...)
+	lastNewline := bytes.LastIndexByte(data, '\n')
+	if lastNewline < 0 {
+		c.pending = append(c.pending[:0], data...)
+		return nil, nil
+	}
+	complete := data[:lastNewline+1]
+	c.pending = append(c.pending[:0], data[lastNewline+1:]...)
+	return decodeEventData(path, complete)
 }
 
 func (m *Metrics) Update(event Event, retentionDays int) {

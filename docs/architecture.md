@@ -163,6 +163,7 @@ paxm [--config PATH] setup
 paxm [--config PATH] recall --query TEXT [--limit N] [--json]
 paxm [--config PATH] remember [--profile stm|ltm] --text TEXT
 paxm [--config PATH] history [--days N] [--json]
+paxm [--config PATH] logs [--tail N] [--follow] [--json]
 paxm [--config PATH] backfill scan --agent AGENT [--before TIME]
 paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]
 paxm [--config PATH] backfill status --agent AGENT --provider NAME
@@ -312,6 +313,13 @@ Rotation renames the active file to `.1`, shifts older backups, and deletes the
 oldest backup beyond the configured limit. Metrics are overwritten on update and
 prune daily buckets according to `retention_days`, so aggregate history does not
 grow without bound.
+
+`paxm logs` is the local raw-event view over this storage. Static tail reads
+retained files from oldest backup through the active file and keeps the final N
+events. Follow mode establishes its initial tail and active-file cursor while
+holding the telemetry lock, then follows appends and reopens the active path when
+rotation changes its file identity. It supports compact human output and JSONL.
+The MCP interface keeps only aggregate `paxm_history`; raw logs remain local.
 
 Default events avoid storing raw query or memory text. They include query length,
 a query hash prefix, profile, hook event, agent target, hit/insert/write counts,

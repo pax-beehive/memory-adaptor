@@ -129,6 +129,57 @@ func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
 	}
 }
 
+func TestCLILogsTailHumanAndJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	recorder := telemetry.NewRecorder(cfg.Telemetry, configPath)
+	if err := recorder.Record(telemetry.Event{
+		Time:        time.Date(2026, 7, 10, 10, 1, 0, 0, time.UTC),
+		Kind:        "recall",
+		Source:      "cli",
+		Command:     "recall",
+		Profile:     "default",
+		Success:     true,
+		HitCount:    2,
+		DurationMS:  12,
+		QueryLength: 18,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main([]string{"--config", configPath, "logs", "--tail", "1"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("logs failed with code %d: %s", code, stderr.String())
+	}
+	for _, want := range []string{"2026-07-10T10:01:00Z", "OK", "recall", "command=recall", "hits=2", "duration_ms=12"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("human logs missing %q: %s", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"--config", configPath, "logs", "--tail", "1", "--json"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("JSON logs failed with code %d: %s", code, stderr.String())
+	}
+	var event telemetry.Event
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &event); err != nil {
+		t.Fatalf("decode JSON log: %v: %s", err, stdout.String())
+	}
+	if event.Kind != "recall" || event.HitCount != 2 {
+		t.Fatalf("unexpected JSON log event: %#v", event)
+	}
+}
+
 func TestCLIMCPServeInitialize(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.DefaultConfig(configPath)
