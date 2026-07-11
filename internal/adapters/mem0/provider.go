@@ -115,7 +115,11 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 	if err := p.doJSON(ctx, http.MethodPost, "/search", request, &response); err != nil {
 		return nil, err
 	}
-	return hitsFromResponse(response), nil
+	hits := hitsFromResponse(response)
+	for i := range hits {
+		hits[i].Provider = p.name
+	}
+	return hits, nil
 }
 
 func (p *Provider) Put(ctx context.Context, item memory.MemoryItem) (memory.MemoryRef, error) {

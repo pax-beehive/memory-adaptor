@@ -169,82 +169,28 @@ producer sessions and fresh Claude Code control/passive/active consumers in
 audited OS sandboxes, with one SQLite database as the only shared channel. The
 initial three-scenario run showed 2/3 safe success for control and 3/3 for both
 memory-assisted arms. This is directional evidence, not a probability estimate;
-scenario expansion and repeated trials remain follow-up work.
+scenario expansion is not part of the remaining paxm roadmap.
 
-Build the evaluation harness before starting the macOS application. Its results
-will determine which policy controls and explanations the UI actually needs.
+The evaluation and adapter contract layer is complete and exercises the same
+runtime, facade, router, profiles, and provider adapters used in production.
 
-The harness should exercise the same runtime, facade, router, profiles, and
-provider adapters used in production. It must not contain a separate recall
-implementation.
+### Provider Adapter Contract Matrix
 
-### Scenario Model
+Status: completed. SQLite, Mem0, Zep, and JSON-RPC run the same shared contract
+harness with provider-specific fixtures. The matrix covers stable naming,
+health behavior, write acknowledgements, search result identity, and the common
+provider boundary and context cancellation. Existing provider-specific tests
+supplement the shared matrix with backend request shapes and supported response
+fields; their capabilities are not assumed to be identical.
 
-Each scenario should contain:
+The executable matrix and its scope are documented in
+[`docs/provider-adapter-contract.md`](provider-adapter-contract.md). It
+deliberately excludes ranking, semantic recall, consolidation quality, latency,
+and result counts.
 
-- normalized historical user and assistant turns;
-- durable facts or decisions expected to be written;
-- one or more later recall queries;
-- expected relevant memories;
-- known irrelevant or harmful memories that must not be inserted;
-- workspace, agent, session, and time metadata when they affect behavior.
-
-Start with a 100-case deterministic SQLite baseline built from sanitized,
-versioned scenario families. Cover active recall, initial passive recall, later
-passive recall, distractor suppression, ranking, STM and LTM retrieval, result
-limits, and contextual metadata. CI runs retrieval as a non-gating benchmark,
-uses conversation-write assertions for the eval-level adapter gate, and relies
-on focused Go contract tests for routing, result mapping, queues, and lifecycle.
-
-### Optional Provider Challenge Set
-
-Provider benchmarking may use a separate opt-in challenge suite with
-intentionally difficult cases:
-
-- indirect and synonymous queries that do not repeat memory wording;
-- 20-100 strong distractors, including the correct entity with a wrong value;
-- old/new conflicts across time, workspace, agent, and session boundaries;
-- shared databases that accumulate realistic long-running memory pollution;
-- negative cases where inserting no memory is the correct result;
-- near-duplicate, partial-update, and contradictory consolidation cases;
-- top-1 and top-3 ranking quality, not only whether a target appears anywhere.
-
-Challenge scores belong to the configured memory provider and profile. They may
-help users compare deployments, but they are not a paxm release gate and must
-not pull semantic ranking or memory consolidation into the adapter layer.
-
-### Measurements
-
-At minimum, report:
-
-- recall at K and mean reciprocal rank;
-- precision at K and false-positive insertion rate;
-- missed expected memories;
-- provider and end-to-end latency;
-- result count and inserted context size;
-- required-provider failures and best-effort degradation;
-- results grouped by provider, recall profile, and scenario.
-
-The runner should emit both machine-readable JSON and a concise human-readable
-report. A comparison mode should show regressions and improvements between two
-profiles, providers, or code revisions.
-
-### Initial Exit Criteria
-
-- The repository has a versioned baseline scenario suite.
-- The first baseline contains exactly 100 validated cases. CI executes them
-  through the production runtime as a non-gating provider benchmark.
-- CI can run the deterministic local-provider portion without external API
-  keys.
-- Remote-provider evaluations are opt-in and clearly separated from the local
-  baseline.
-- Changes to ranking, thresholds, admission, deduplication, or default profiles
-  include before-and-after evaluation evidence.
-- Acceptable regression budgets are recorded once the first baseline is known;
-  numeric targets should come from measured results rather than being invented
-  in advance.
-- Adapter contract gates cover write fidelity, cleaning, routing, durable
-  delivery, recall request forwarding, result mapping, and observability.
+With the adapter contract matrix, durable queue tests, telemetry contracts, and
+agent write/cleaning gate in CI, Phase 2 is complete. No additional provider
+quality or challenge-set work is required for the paxm roadmap.
 
 ## Phase 3: Native macOS Application
 
@@ -329,7 +275,6 @@ their own scenarios and measurable acceptance criteria.
 
 ## Current Priority Order
 
-1. Recall evaluation harness and baseline scenarios.
-2. Native macOS application using the paxm core.
-3. Agent and provider integrations selected from demonstrated demand.
-4. Additional facade behavior justified by evaluation evidence.
+1. Native macOS application using the paxm core.
+2. Agent and provider integrations selected from demonstrated demand.
+3. Additional facade behavior justified by real adapter failures.

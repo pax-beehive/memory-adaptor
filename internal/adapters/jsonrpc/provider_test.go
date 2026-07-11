@@ -7,9 +7,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pax-beehive/memory-adaptor/internal/adapters/contracttest"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 )
+
+func TestProviderAdapterContract(t *testing.T) {
+	provider := newHelperProvider(t, "plugin")
+	contracttest.Run(t, provider, contracttest.Expectation{
+		Name: "plugin", Item: memory.MemoryItem{Text: "remember this"}, Query: memory.SearchQuery{Text: "paxm config", Limit: 3, Metadata: map[string]string{"workspace": "/tmp/project"}},
+		RefID: "put-1", HitID: "hit-1", HitText: "YAML config is the paxm default",
+	})
+}
 
 func TestNewValidatesConfig(t *testing.T) {
 	t.Parallel()
