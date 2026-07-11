@@ -1,11 +1,11 @@
 ---
 name: paxm
-description: Use paxm as an active agent memory layer. Trigger when the user asks to recall prior context, search or inspect memory, remember a durable fact, debug paxm history/metrics, or when a task would benefit from active memory recall before answering, especially repo, project, preference, architecture, or previous-decision questions.
+description: Use paxm as an active agent memory layer. Trigger when the user asks to recall prior context, search or inspect memory, remember working state or a durable fact, debug paxm history/metrics, or when a task would benefit from active memory recall before answering, especially repo, project, preference, architecture, or previous-decision questions.
 ---
 
 # paxm
 
-Use `paxm` to actively recall and record memory while keeping setup and provider policy under the user's control.
+Use `paxm` to actively recall and record memory while keeping setup and provider policy under the user's control. Active agent writes should use short-term memory (`stm`) unless the user or evidence clearly calls for durable long-term memory (`ltm`).
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ If `paxm config doctor` says config is missing or invalid, the user needs one in
 paxm setup
 ```
 
-`paxm setup` lets the user choose memory provider instances and passive agent integrations for Codex, Claude Code, or Pi. It does not install active recall skills; the user owns that installation. Active recall needs at least one enabled readable provider instance. `sqlite` works without an API key; remote providers such as Zep or Mem0 require the user to provide their own connection details during setup, and JSON-RPC plugin providers require a local plugin command. Passive hook recall only works after hooks are installed by setup, but active commands still work independently.
+`paxm setup` lets the user choose memory provider instances and passive agent integrations for Codex, Claude Code, or Pi. It does not install active recall skills; the user owns that installation. Active recall needs at least one enabled readable provider instance. `sqlite` works without an API key; remote providers such as Zep or Mem0 require the user to provide their own connection details during setup, and JSON-RPC plugin providers require a local plugin command. Passive hook recall only works after hooks are installed by setup, but active commands still work independently. Passive hook writes use long-term memory (`ltm`) by default; active agent writes should normally use `stm`.
 
 If the user gives a config path, pass it through every command:
 
@@ -44,7 +44,7 @@ When the host has paxm configured as an MCP server, prefer the structured MCP
 tools over shelling out:
 
 - `paxm_recall` instead of `paxm recall --json`
-- `paxm_remember` instead of `paxm remember`
+- `paxm_remember` instead of `paxm remember`; pass `profile: "stm"` for working memory or `profile: "ltm"` for durable facts
 - `paxm_history` instead of `paxm history --json`
 - `paxm_config_doctor` instead of `paxm config doctor --json`
 
@@ -107,20 +107,27 @@ without checking current source when accuracy matters.
 
 ## Remember
 
-Store only durable, reusable facts:
+Use short-term memory for active task state that may help the next few turns or
+near-future follow-ups:
 
 ```bash
-paxm remember --text "Decision: paxm setup owns provider and hook configuration; visible hook install/test commands are intentionally omitted."
+paxm remember --profile stm --text "Working note: PR #42 is blocked on the mem0 tier-filter test."
 ```
 
-Good candidates:
+Use long-term memory only for durable, reusable facts:
+
+```bash
+paxm remember --profile ltm --text "Decision: paxm setup owns provider and hook configuration; visible hook install/test commands are intentionally omitted."
+```
+
+Good `ltm` candidates:
 
 - user preferences that should affect future agent behavior;
 - project architecture decisions and settled terminology;
 - commands or fixes that resolved a recurring issue;
 - repo-specific conventions that are likely to matter again.
 
-Do not store secrets, API keys, access tokens, private raw logs, large pasted content, or short-lived task state. Ask before storing sensitive personal or business information.
+Do not store secrets, API keys, access tokens, private raw logs, or large pasted content. Do not promote short-lived task state to `ltm`; keep it in `stm`. Ask before storing sensitive personal or business information.
 
 ## Debugging Memory Use
 
@@ -136,9 +143,11 @@ Use this when the user asks whether passive recall fired, why a memory was not r
 ## Operating Rules
 
 - Keep active recall conservative: do not inject weakly related memories into the answer.
+- Use `stm` for active scratchpad-like writes and `ltm` only for durable facts.
 - Prefer `--json` for agent consumption because it includes structured scores and provider fields.
 - Keep `--limit` small by default; use `--limit 5` or higher only when the task genuinely needs broader context.
 - Do not run `paxm setup` silently. It is interactive and changes user-owned config and hooks.
 - Do not run `paxm uninstall` silently. It removes passive agent integrations; use `--agent` to scope cleanup and `--yes` only with explicit user approval.
 - Do not edit paxm config files by hand unless the user explicitly asks; prefer `paxm setup` for configuration.
 - Do not treat passive hook behavior as guaranteed unless setup installed hooks and history shows events.
+- Do not look for or run a manual memory cleanup command. Expired STM cleanup is a best-effort hook-flush side effect, and recall filters expired rows even before storage cleanup runs.

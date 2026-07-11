@@ -79,7 +79,7 @@ func writeSetupSummary(writer io.Writer, cfg config.Config, providers, agents ma
 		}
 		writeSummary := "off"
 		if len(writeEvents) > 0 {
-			writeSummary = strings.Join(writeEvents, ",")
+			writeSummary = strings.Join(writeEvents, ",") + " profile=" + firstNonEmpty(agentWriteProfile(agent), "ltm")
 		}
 		fmt.Fprintf(writer, "    %s: recall=%s write=%s\n", option.Label, recall, writeSummary)
 	}
@@ -168,7 +168,7 @@ func configureAgentWrites(prompter *setupPrompter, cfg *config.Config, agent *co
 		}
 		return nil
 	}
-	profileDefault := "default"
+	profileDefault := "ltm"
 	for _, eventName := range eventNames {
 		if profile := strings.TrimSpace(agent.Hooks[eventName].Write.Profile); profile != "" {
 			profileDefault = profile
@@ -258,6 +258,15 @@ func agentPassiveWriteEnabled(agent config.AgentConfig) bool {
 		}
 	}
 	return false
+}
+
+func agentWriteProfile(agent config.AgentConfig) string {
+	for _, eventName := range agentWriteEvents(agent) {
+		if profile := strings.TrimSpace(agent.Hooks[eventName].Write.Profile); profile != "" {
+			return profile
+		}
+	}
+	return ""
 }
 
 func recallProfileOptions(cfg config.Config) []setupOption {

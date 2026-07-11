@@ -624,6 +624,64 @@ func TestHookBufferShutdownFlushesPendingItems(t *testing.T) {
 	}
 }
 
+func TestHookBufferFlushSchedulesAsyncCleanup(t *testing.T) {
+	original := scheduleHookCleanup
+	cleanupCalled := make(chan struct{}, 1)
+	scheduleHookCleanup = func(*facade.Service) {
+		cleanupCalled <- struct{}{}
+	}
+	t.Cleanup(func() {
+		scheduleHookCleanup = original
+	})
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	provider := cfg.Providers["sqlite"]
+	provider.Path = filepath.Join(t.TempDir(), "memory.sqlite")
+	cfg.Providers["sqlite"] = provider
+	router, err := adapters.DefaultRegistry().BuildRouter(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := facade.New(cfg, router)
+	buffer := []facade.IngestInput{{
+		Text:    "flush cleanup sentinel",
+		Profile: "default",
+		Source:  "test",
+	}}
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	type result struct {
+		flushed  int
+		shutdown bool
+		err      error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		flushed, shutdown, err := handleHookBufferConn(context.Background(), service, serverConn, &buffer)
+		resultCh <- result{flushed: flushed, shutdown: shutdown, err: err}
+	}()
+	if err := writeJSON(clientConn, hookBufferRequest{Action: "flush"}); err != nil {
+		t.Fatal(err)
+	}
+	var response hookBufferResponse
+	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	got := <-resultCh
+	if got.err != nil || got.shutdown || got.flushed != 1 || !response.OK || response.Flushed != 1 {
+		t.Fatalf("unexpected flush result: result=%#v response=%#v", got, response)
+	}
+	select {
+	case <-cleanupCalled:
+	default:
+		t.Fatal("flush did not schedule async cleanup")
+	}
+}
+
 func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.DefaultConfig(configPath)
@@ -782,20 +840,18 @@ func TestCLISetupInteractiveJSONRPCProvider(t *testing.T) {
 func TestCLISetupEnsuresZepUserTarget(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PAXM_CODEX_CONFIG", filepath.Join(t.TempDir(), "codex.toml"))
-	originalEnsure := ensureZepUser
-	t.Cleanup(func() {
-		ensureZepUser = originalEnsure
-	})
 	var ensured config.ProviderConfig
-	ensureZepUser = func(_ context.Context, cfg config.ProviderConfig) (zepadapter.EnsureUserResult, error) {
-		ensured = cfg
-		return zepadapter.EnsureUserResult{UserID: cfg.UserID, Created: true}, nil
+	deps := Dependencies{
+		EnsureZepUser: func(_ context.Context, cfg config.ProviderConfig) (zepadapter.EnsureUserResult, error) {
+			ensured = cfg
+			return zepadapter.EnsureUserResult{UserID: cfg.UserID, Created: true}, nil
+		},
 	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	setupInput := strings.NewReader("2\nzep-key\n1\ntoddzheng\n6\n1\n2\nnone\n")
-	if code := Main([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr); code != 0 {
+	if code := MainWithDependencies([]string{"--config", configPath, "setup"}, setupInput, &stdout, &stderr, deps); code != 0 {
 		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
 	}
 

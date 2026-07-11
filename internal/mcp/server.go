@@ -197,11 +197,11 @@ func toolDefinitions() []toolDefinition {
 		{
 			Name:        "paxm_remember",
 			Title:       "Remember Memory",
-			Description: "Store a durable memory through the configured paxm write profile.",
+			Description: "Store memory through the configured paxm write profile. Use profile=stm for short-term working memory and profile=ltm for durable facts.",
 			InputSchema: objectSchema(map[string]any{
 				"text":     map[string]any{"type": "string", "description": "Memory text to store."},
 				"id":       map[string]any{"type": "string", "description": "Optional caller-stable memory id."},
-				"profile":  map[string]any{"type": "string", "description": "Optional write profile."},
+				"profile":  map[string]any{"type": "string", "description": "Optional write profile. Defaults to the configured default profile."},
 				"source":   map[string]any{"type": "string", "description": "Optional source label. Defaults to mcp."},
 				"metadata": stringMapSchema("Optional metadata to store with the memory."),
 			}, []string{"text"}),

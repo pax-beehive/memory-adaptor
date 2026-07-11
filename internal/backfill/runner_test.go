@@ -99,7 +99,11 @@ func TestRunnerEdgeCasesTable(t *testing.T) {
 		defer store.Close()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		status, err := (Runner{Store: store, Service: facade.New(config.Config{Version: 1}, router)}).Run(ctx, RunOptions{
+		status, err := (Runner{
+			Store:     store,
+			Service:   facade.New(config.Config{Version: 1}, router),
+			ProcessID: func() int { return 4242 },
+		}).Run(ctx, RunOptions{
 			Scope:    "scope",
 			RunID:    "run",
 			Agent:    "codex",
@@ -108,6 +112,9 @@ func TestRunnerEdgeCasesTable(t *testing.T) {
 		})
 		if err == nil || status.State != "paused" {
 			t.Fatalf("Run() status=%#v err=%v, want paused error", status, err)
+		}
+		if status.PID != 4242 {
+			t.Fatalf("Run() PID = %d, want injected PID", status.PID)
 		}
 	})
 

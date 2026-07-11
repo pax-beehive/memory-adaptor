@@ -74,6 +74,9 @@ func (r *Router) SearchWithPolicy(ctx context.Context, query SearchQuery, policy
 	if policy.Limit > 0 {
 		query.Limit = policy.Limit
 	}
+	if len(policy.Tiers) > 0 {
+		query.Tiers = NormalizeTiers(policy.Tiers)
+	}
 
 	result, requiredErrs := collectSearchResponses(searchProviders(ctx, query, readable), policy)
 	if len(requiredErrs) > 0 {
@@ -161,6 +164,11 @@ func appendSearchResponse(result *SearchResult, seen map[string]struct{}, respon
 	}
 	for _, hit := range response.hits {
 		hit.Provider = name
+		hit.Tier = EffectiveHitTier(hit)
+		hit.ExpiresAt = EffectiveHitExpiresAt(hit)
+		if !hitMatchesPolicy(hit, policy, time.Now().UTC()) {
+			continue
+		}
 		relevance := normalizedRelevance(hit)
 		if relevance < minRelevance {
 			continue
@@ -218,6 +226,7 @@ func (r *Router) PutBatchWithPolicy(ctx context.Context, items []MemoryItem, pol
 	if len(items) == 0 {
 		return PutResult{}, nil
 	}
+	items = applyPutPolicy(items, policy)
 
 	type response struct {
 		binding ProviderBinding
@@ -267,6 +276,44 @@ func (r *Router) PutBatchWithPolicy(ctx context.Context, items []MemoryItem, pol
 		return result.Refs[i].Provider < result.Refs[j].Provider
 	})
 	return result, nil
+}
+
+func applyPutPolicy(items []MemoryItem, policy PutPolicy) []MemoryItem {
+	if policy.Tier == "" && policy.ExpiresAfter <= 0 {
+		return items
+	}
+	applied := append([]MemoryItem(nil), items...)
+	for i := range applied {
+		if policy.Tier != "" && applied[i].Tier == "" {
+			applied[i].Tier = NormalizeTier(policy.Tier)
+		}
+		if policy.ExpiresAfter > 0 && applied[i].ExpiresAt == nil {
+			base := applied[i].CreatedAt
+			if base.IsZero() {
+				base = time.Now().UTC()
+			}
+			expiresAt := base.Add(policy.ExpiresAfter).UTC()
+			applied[i].ExpiresAt = &expiresAt
+		}
+	}
+	return applied
+}
+
+func hitMatchesPolicy(hit MemoryHit, policy SearchPolicy, now time.Time) bool {
+	if hit.ExpiresAt != nil && !hit.ExpiresAt.After(now) {
+		return false
+	}
+	tiers := NormalizeTiers(policy.Tiers)
+	if len(tiers) == 0 {
+		return true
+	}
+	tier := EffectiveHitTier(hit)
+	for _, allowed := range tiers {
+		if tier == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func putBatch(ctx context.Context, provider Provider, items []MemoryItem) ([]MemoryRef, error) {
@@ -364,6 +411,39 @@ func (r *Router) Health(ctx context.Context) ([]ProviderHealth, error) {
 		return statuses, errors.Join(requiredErrs...)
 	}
 	return statuses, nil
+}
+
+func (r *Router) CleanupExpired(ctx context.Context, limit int) (CleanupExpiredResult, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	var result CleanupExpiredResult
+	var requiredErrs []error
+	for _, binding := range r.providers {
+		cleanupProvider, ok := binding.Provider.(CleanupExpiredProvider)
+		if !ok {
+			continue
+		}
+		name := binding.Provider.Name()
+		deleted, err := cleanupProvider.CleanupExpired(ctx, limit)
+		if err != nil {
+			result.ProviderErrors = append(result.ProviderErrors, ProviderError{
+				Provider: name,
+				Required: binding.Required,
+				Op:       "cleanup_expired",
+				Error:    err.Error(),
+			})
+			if binding.Required {
+				requiredErrs = append(requiredErrs, fmt.Errorf("%s: %w", name, err))
+			}
+			continue
+		}
+		result.Deleted += deleted
+	}
+	if len(requiredErrs) > 0 {
+		return result, errors.Join(requiredErrs...)
+	}
+	return result, nil
 }
 
 func dedupeKey(hit MemoryHit) string {

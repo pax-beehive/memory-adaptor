@@ -18,8 +18,9 @@ import (
 const maxItemBytes = 24 * 1024
 
 type Runner struct {
-	Store   *Store
-	Service *facade.Service
+	Store     *Store
+	Service   *facade.Service
+	ProcessID func() int
 }
 
 type RunOptions struct {
@@ -56,7 +57,7 @@ func (r Runner) Run(ctx context.Context, options RunOptions) (Status, error) {
 	}
 	defer release()
 
-	status := initialStatus(options)
+	status := r.initialStatus(options)
 	if err := r.publish(options, status); err != nil {
 		return status, err
 	}
@@ -71,12 +72,12 @@ func (r Runner) Run(ctx context.Context, options RunOptions) (Status, error) {
 	return r.finishBackfillRun(options, status, operationErrors)
 }
 
-func initialStatus(options RunOptions) Status {
+func (r Runner) initialStatus(options RunOptions) Status {
 	status := Status{
 		State:      "running",
 		Mode:       firstNonEmpty(options.Mode, "foreground"),
 		RunID:      options.RunID,
-		PID:        processID(),
+		PID:        r.processID(),
 		Agent:      options.Agent,
 		Provider:   options.Provider,
 		StartedAt:  time.Now().UTC(),
@@ -86,6 +87,13 @@ func initialStatus(options RunOptions) Status {
 		status.TotalBytes += file.Size
 	}
 	return status
+}
+
+func (r Runner) processID() int {
+	if r.ProcessID != nil {
+		return r.ProcessID()
+	}
+	return processID()
 }
 
 func (r Runner) processBackfillFiles(ctx context.Context, options RunOptions, status *Status) ([]error, error) {
@@ -325,8 +333,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func processID() int {
-	return processIDValue
 }

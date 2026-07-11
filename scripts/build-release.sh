@@ -6,8 +6,6 @@ export LANG=C
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="${DIST:-"$ROOT/dist"}"
 VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always --dirty)}"
-PKG="github.com/pax-beehive/memory-adaptor/internal/cli"
-
 rm -rf "$DIST"
 mkdir -p "$DIST"
 
@@ -35,7 +33,7 @@ for target in "${targets[@]}"; do
   echo "building $name"
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
     go build -trimpath \
-      -ldflags "-s -w -X ${PKG}.version=${VERSION}" \
+      -ldflags "-s -w -X main.version=${VERSION}" \
       -o "$binary" \
       "$ROOT/cmd/paxm"
 

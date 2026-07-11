@@ -59,7 +59,8 @@ A recall profile is the policy boundary for reads. It chooses:
 - each provider route weight;
 - max result count;
 - relevance and final score thresholds, with optional provider-route overrides;
-- ranking behavior.
+- ranking behavior;
+- memory tiers (`stm`, `ltm`) to search.
 
 `min_relevance` filters provider-normalized hits before cross-provider ranking.
 `min_score` filters the final merged score after route weight and ranking boosts.
@@ -69,7 +70,8 @@ Passive hook recall should not use one policy for every turn. The default
 `passive_initial` profile is used only for the first `user_input` observed for a
 session and is intentionally looser, closer to a RAG warmup for project context.
 The default `passive` profile is used for later `user_input` hooks and limits
-results to 2 with higher relevance and score thresholds.
+results to 2 with higher relevance and score thresholds. Passive profiles read
+`ltm` only by default.
 
 Active recall is agent-driven. A skill or agent may run multiple explicit
 `paxm recall` commands when an earlier result exposes a narrower lead, such as a
@@ -77,6 +79,8 @@ document title, issue id, symbol, command, error text, or decision keyword. Paxm
 does not plan that query chain; it provides the recall surface and structured
 scores. The agent should keep each follow-up query focused, stop after a small
 number of hops, and verify current source when the remembered fact can drift.
+The default active recall profile reads both `stm` and `ltm`, so short-lived
+working memory can help active reasoning without being inserted by passive hooks.
 
 Agents that support MCP can use `paxm mcp serve` instead of shelling out to the
 CLI. The MCP server exposes `paxm_recall`, `paxm_remember`, `paxm_history`, and
@@ -90,9 +94,15 @@ backfill execution as MCP tools.
 A write profile is the policy boundary for writes. It chooses:
 
 - which enabled providers receive writes;
-- whether each provider is required or best effort for that write route.
+- whether each provider is required or best effort for that write route;
+- the memory tier assigned to the item;
+- optional expiry for short-term memory.
 
 Enabled providers can be used by multiple read and write profiles.
+The built-in `stm` profile writes short-term working memory with a 24 hour
+expiry. The built-in `ltm` profile writes durable long-term memory. Passive hook
+writes default to `ltm`; active agents should use `stm` for task-local working
+state and `ltm` only for durable facts.
 
 ## Agent Entries
 
@@ -122,7 +132,7 @@ Each shim calls a hidden internal hook entrypoint. The public CLI surface stays:
 ```text
 paxm [--config PATH] setup
 paxm [--config PATH] recall --query TEXT [--limit N] [--json]
-paxm [--config PATH] remember --text TEXT
+paxm [--config PATH] remember [--profile stm|ltm] --text TEXT
 paxm [--config PATH] history [--days N] [--json]
 paxm [--config PATH] backfill scan --agent AGENT [--before TIME]
 paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]
@@ -211,7 +221,18 @@ write profile. The provider decides what to do with that text:
   extraction, summarization, filtering, or raw storage behavior.
 
 This keeps paxm's write boundary simple: templates decide what evidence is sent,
-write profiles decide which providers receive it, and providers own extraction.
+write profiles decide which providers receive it and which memory tier it uses,
+and providers own extraction. SQLite stores tier and expiry as columns. Zep,
+Mem0, and JSON-RPC receive the same fields on `MemoryItem`; for remote results,
+the core router also understands `paxm_tier` and `paxm_expires_at` metadata.
+
+After a successful hook-buffer flush, paxm schedules a best-effort expired-memory
+cleanup in the background. Cleanup is provider opt-in: SQLite deletes a bounded
+batch of rows whose `expires_at` has passed, while providers without cleanup
+support are skipped. Recall correctness does not depend on cleanup because both
+SQLite and the core router filter expired hits before returning them. The cleanup
+path is storage hygiene only, and it does not block the hook response or run
+`VACUUM`.
 
 Pi is integrated through Pi's extension system:
 

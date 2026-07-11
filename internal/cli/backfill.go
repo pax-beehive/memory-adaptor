@@ -379,10 +379,8 @@ func writeBackfillStartResult(path string, result backfillStartResult) error {
 
 func validateBackfillAgent(value string) (string, error) {
 	agent := normalizeAgentName(value)
-	for _, supported := range supportedPassiveAgents {
-		if agent == supported {
-			return agent, nil
-		}
+	if isSupportedPassiveAgent(agent) {
+		return agent, nil
 	}
 	return "", fmt.Errorf("unsupported agent %q; expected codex, claude, or pi", value)
 }

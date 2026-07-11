@@ -26,18 +26,32 @@ import (
 	"github.com/pax-beehive/memory-adaptor/internal/telemetry"
 )
 
-var ensureZepUser = zepadapter.EnsureUser
+const (
+	defaultVersion                = "dev"
+	legacyDefaultRecallMaxResults = 8
+)
 
-var version = "dev"
+type ensureZepUserFunc func(context.Context, config.ProviderConfig) (zepadapter.EnsureUserResult, error)
+
+type Dependencies struct {
+	Version       string
+	EnsureZepUser ensureZepUserFunc
+}
 
 type runner struct {
-	stdin      io.Reader
-	stdout     io.Writer
-	stderr     io.Writer
-	configPath string
+	stdin         io.Reader
+	stdout        io.Writer
+	stderr        io.Writer
+	configPath    string
+	version       string
+	ensureZepUser ensureZepUserFunc
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return MainWithDependencies(args, stdin, stdout, stderr, Dependencies{})
+}
+
+func MainWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Writer, deps Dependencies) int {
 	if stdin == nil {
 		stdin = strings.NewReader("")
 	}
@@ -52,11 +66,14 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	deps = deps.withDefaults()
 	r := runner{
-		stdin:      stdin,
-		stdout:     stdout,
-		stderr:     stderr,
-		configPath: configPath,
+		stdin:         stdin,
+		stdout:        stdout,
+		stderr:        stderr,
+		configPath:    configPath,
+		version:       deps.Version,
+		ensureZepUser: deps.EnsureZepUser,
 	}
 	if len(args) == 0 {
 		r.printHelp()
@@ -67,7 +84,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if args[0] == "--version" || args[0] == "-v" {
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintln(stdout, r.versionString())
 		return 0
 	}
 	if err := r.run(args); err != nil {
@@ -75,6 +92,30 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func (deps Dependencies) withDefaults() Dependencies {
+	if strings.TrimSpace(deps.Version) == "" {
+		deps.Version = defaultVersion
+	}
+	if deps.EnsureZepUser == nil {
+		deps.EnsureZepUser = zepadapter.EnsureUser
+	}
+	return deps
+}
+
+func (r runner) versionString() string {
+	if strings.TrimSpace(r.version) != "" {
+		return r.version
+	}
+	return defaultVersion
+}
+
+func (r runner) ensureZepUserFunc() ensureZepUserFunc {
+	if r.ensureZepUser != nil {
+		return r.ensureZepUser
+	}
+	return zepadapter.EnsureUser
 }
 
 func (r runner) run(args []string) error {
@@ -96,7 +137,7 @@ func (r runner) run(args []string) error {
 	case "update":
 		return r.runUpdate(args[1:])
 	case "version":
-		fmt.Fprintln(r.stdout, version)
+		fmt.Fprintln(r.stdout, r.versionString())
 		return nil
 	case "config":
 		return r.runConfig(args[1:])
@@ -146,7 +187,7 @@ func (r runner) runSetup(args []string) error {
 			return err
 		}
 	}
-	zepUserResult, err := maybeEnsureZepUser(context.Background(), cfg)
+	zepUserResult, err := r.maybeEnsureZepUser(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
@@ -296,12 +337,12 @@ func (r runner) finishSetupPrompt(err error) error {
 	return err
 }
 
-func maybeEnsureZepUser(ctx context.Context, cfg config.Config) (*zepadapter.EnsureUserResult, error) {
+func (r runner) maybeEnsureZepUser(ctx context.Context, cfg config.Config) (*zepadapter.EnsureUserResult, error) {
 	provider, ok := cfg.Providers["zep"]
 	if !ok || !provider.Enabled || provider.Type != "zep" || strings.TrimSpace(provider.UserID) == "" {
 		return nil, nil
 	}
-	result, err := ensureZepUser(ctx, provider)
+	result, err := r.ensureZepUserFunc()(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -328,9 +369,9 @@ func setupBaseConfig(path string, useExisting bool) (config.Config, error) {
 			cfg.RecallProfiles[name] = mergeRecallProfileDefaults(name, existing, profile)
 		} else {
 			if name == "passive" {
-				cfg.RecallProfiles[name] = passiveProfileFrom(cfg.RecallProfiles["default"])
+				cfg.RecallProfiles[name] = config.PassiveRecallProfileFrom(cfg.RecallProfiles["default"])
 			} else if name == "passive_initial" {
-				cfg.RecallProfiles[name] = passiveInitialProfileFrom(cfg.RecallProfiles["default"])
+				cfg.RecallProfiles[name] = config.PassiveInitialRecallProfileFrom(cfg.RecallProfiles["default"])
 			} else {
 				cfg.RecallProfiles[name] = profile
 			}
@@ -365,14 +406,10 @@ func setupBaseConfig(path string, useExisting bool) (config.Config, error) {
 }
 
 func mergeRecallProfileDefaults(name string, current, defaults config.RecallProfileConfig) config.RecallProfileConfig {
-	if name == "default" && current.MaxResults == 8 && defaults.MaxResults == 3 && isDefaultRecallThreshold(current.Thresholds) {
+	if name == "default" && current.MaxResults == legacyDefaultRecallMaxResults && config.IsDefaultRecallProfile(defaults) && config.IsDefaultRecallThresholds(current.Thresholds) {
 		current.MaxResults = defaults.MaxResults
 	}
 	return current
-}
-
-func isDefaultRecallThreshold(threshold config.RecallThresholdConfig) bool {
-	return threshold.MinRelevance == 0.25 && threshold.MinScore == 0.25
 }
 
 func mergeTelemetryDefaults(current, defaults config.TelemetryConfig) config.TelemetryConfig {
@@ -434,36 +471,6 @@ func mergeHookDefaults(current, defaults config.AgentHookConfig) config.AgentHoo
 		current.Write.Buffer = defaults.Write.Buffer
 	}
 	return current
-}
-
-func passiveProfileFrom(base config.RecallProfileConfig) config.RecallProfileConfig {
-	return config.RecallProfileConfig{
-		Providers:  append([]config.ProviderRouteConfig(nil), base.Providers...),
-		MaxResults: 2,
-		Thresholds: config.RecallThresholdConfig{
-			MinRelevance: 0.75,
-			MinScore:     0.75,
-		},
-		Ranking: config.RankingConfig{
-			Type:         "weighted_relevance",
-			RecencyBoost: base.Ranking.RecencyBoost,
-		},
-	}
-}
-
-func passiveInitialProfileFrom(base config.RecallProfileConfig) config.RecallProfileConfig {
-	return config.RecallProfileConfig{
-		Providers:  append([]config.ProviderRouteConfig(nil), base.Providers...),
-		MaxResults: 5,
-		Thresholds: config.RecallThresholdConfig{
-			MinRelevance: 0.35,
-			MinScore:     0.35,
-		},
-		Ranking: config.RankingConfig{
-			Type:         "weighted_relevance",
-			RecencyBoost: base.Ranking.RecencyBoost,
-		},
-	}
 }
 
 func (r runner) runRecall(args []string) error {
@@ -609,6 +616,14 @@ type hookBufferResponse struct {
 	Error          string                 `json:"error,omitempty"`
 }
 
+var scheduleHookCleanup = func(service *facade.Service) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = service.CleanupExpired(ctx, 500)
+	}()
+}
+
 func (r runner) runInternalHook(args []string) error {
 	fs := flag.NewFlagSet("__hook", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
@@ -684,7 +699,9 @@ func (r runner) runHookDaemon(args []string) error {
 		select {
 		case <-deadline.C:
 			if len(buffer) > 0 {
-				_, _ = service.IngestBatch(context.Background(), facade.IngestBatchInput{Items: buffer})
+				if _, err := service.IngestBatch(context.Background(), facade.IngestBatchInput{Items: buffer}); err == nil {
+					scheduleHookCleanup(service)
+				}
 			}
 			return nil
 		case result := <-accepted:
@@ -731,6 +748,7 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 				return 0, false, err
 			}
 			*buffer = nil
+			scheduleHookCleanup(service)
 			_ = writeJSON(conn, hookBufferResponse{
 				OK:             true,
 				Flushed:        flushed,
@@ -776,6 +794,7 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 			ProviderRefs:   telemetry.ProviderRefs(result.Refs),
 			ProviderErrors: result.ProviderErrors,
 		})
+		scheduleHookCleanup(service)
 		return 1, false, nil
 	}
 	*buffer = append(*buffer, item)
@@ -798,6 +817,7 @@ func handleHookBufferConn(ctx context.Context, service *facade.Service, conn net
 		return 0, false, err
 	}
 	*buffer = nil
+	scheduleHookCleanup(service)
 	_ = writeJSON(conn, hookBufferResponse{
 		OK:             true,
 		Buffered:       true,
@@ -1033,7 +1053,7 @@ func (r runner) runMCP(args []string) error {
 		}
 		return mcp.Serve(mcp.Options{
 			ConfigPath: r.configFile(),
-			Version:    version,
+			Version:    r.versionString(),
 			Stdin:      r.stdin,
 			Stdout:     r.stdout,
 			Stderr:     r.stderr,
@@ -1091,7 +1111,7 @@ func (r runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] setup")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] uninstall [--agent AGENT] [--yes]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] recall --query TEXT [--limit N] [--json]")
-	fmt.Fprintln(r.stdout, "  paxm [--config PATH] remember --text TEXT")
+	fmt.Fprintln(r.stdout, "  paxm [--config PATH] remember --profile stm|ltm --text TEXT")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] history [--days N] [--json]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill scan --agent AGENT [--before TIME]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]")
@@ -1507,7 +1527,7 @@ func promptMem0Provider(reader *bufio.Reader, writer io.Writer, cfg *config.Conf
 	mem0 := cfg.Providers[providerName]
 	label := providerPromptLabel(providerName, mem0)
 	var err error
-	mem0.BaseURL, err = promptString(reader, writer, label+" base URL", firstNonEmpty(mem0.BaseURL, "http://localhost:8888"))
+	mem0.BaseURL, err = promptString(reader, writer, label+" base URL", firstNonEmpty(mem0.BaseURL, config.DefaultMem0BaseURL()))
 	if err != nil {
 		return err
 	}
@@ -1740,9 +1760,9 @@ func currentProviderMode(cfg config.Config, provider string) string {
 }
 
 func currentProviderPolicy(cfg config.Config, provider string) string {
-	required, ok := providerRequiredInRecallProfile(cfg.RecallProfiles["default"], provider)
+	required, ok := config.ProviderRouteRequired(cfg.RecallProfiles["default"].Providers, provider)
 	if !ok {
-		required, ok = providerRequiredInWriteProfile(cfg.WriteProfiles["default"], provider)
+		required, ok = config.ProviderRouteRequired(cfg.WriteProfiles["default"].Providers, provider)
 	}
 	if ok && !required {
 		return "best_effort"
@@ -1770,101 +1790,55 @@ func removeProviderFromDefaultProfiles(cfg *config.Config, provider string) {
 }
 
 func recallProfileHasProvider(profile config.RecallProfileConfig, provider string) bool {
-	_, ok := providerRequiredInRecallProfile(profile, provider)
+	_, ok := config.ProviderRouteRequired(profile.Providers, provider)
 	return ok
 }
 
 func writeProfileHasProvider(profile config.WriteProfileConfig, provider string) bool {
-	_, ok := providerRequiredInWriteProfile(profile, provider)
+	_, ok := config.ProviderRouteRequired(profile.Providers, provider)
 	return ok
-}
-
-func providerRequiredInRecallProfile(profile config.RecallProfileConfig, provider string) (bool, bool) {
-	for _, route := range profile.Providers {
-		if route.Name == provider {
-			return route.Required, true
-		}
-	}
-	return false, false
-}
-
-func providerRequiredInWriteProfile(profile config.WriteProfileConfig, provider string) (bool, bool) {
-	for _, route := range profile.Providers {
-		if route.Name == provider {
-			return route.Required, true
-		}
-	}
-	return false, false
 }
 
 func upsertRecallRoute(cfg *config.Config, provider string, required bool) {
 	upsertRecallRouteInProfile(cfg, "default", provider, required)
 	if _, ok := cfg.RecallProfiles["passive"]; !ok {
-		cfg.RecallProfiles["passive"] = passiveProfileFrom(cfg.RecallProfiles["default"])
+		cfg.RecallProfiles["passive"] = config.PassiveRecallProfileFrom(cfg.RecallProfiles["default"])
 	}
 	upsertRecallRouteInProfile(cfg, "passive", provider, required)
 	if _, ok := cfg.RecallProfiles["passive_initial"]; !ok {
-		cfg.RecallProfiles["passive_initial"] = passiveInitialProfileFrom(cfg.RecallProfiles["default"])
+		cfg.RecallProfiles["passive_initial"] = config.PassiveInitialRecallProfileFrom(cfg.RecallProfiles["default"])
 	}
 	upsertRecallRouteInProfile(cfg, "passive_initial", provider, required)
 }
 
 func upsertRecallRouteInProfile(cfg *config.Config, profileName, provider string, required bool) {
 	profile := cfg.RecallProfiles[profileName]
-	for i, route := range profile.Providers {
-		if route.Name == provider {
-			route.Required = required
-			if route.Weight == 0 {
-				route.Weight = 1
-			}
-			profile.Providers[i] = route
-			cfg.RecallProfiles[profileName] = profile
-			return
-		}
-	}
-	profile.Providers = append(profile.Providers, config.ProviderRouteConfig{Name: provider, Required: required, Weight: 1})
+	profile.Providers = config.UpsertProviderRoute(profile.Providers, provider, required)
 	cfg.RecallProfiles[profileName] = profile
 }
 
 func removeRecallRoute(cfg *config.Config, provider string) {
 	for _, profileName := range []string{"default", "passive", "passive_initial"} {
 		profile := cfg.RecallProfiles[profileName]
-		profile.Providers = filterRoutes(profile.Providers, provider)
+		profile.Providers = config.RemoveProviderRoute(profile.Providers, provider)
 		cfg.RecallProfiles[profileName] = profile
 	}
 }
 
 func upsertWriteRoute(cfg *config.Config, provider string, required bool) {
-	profile := cfg.WriteProfiles["default"]
-	for i, route := range profile.Providers {
-		if route.Name == provider {
-			route.Required = required
-			if route.Weight == 0 {
-				route.Weight = 1
-			}
-			profile.Providers[i] = route
-			cfg.WriteProfiles["default"] = profile
-			return
-		}
+	for _, profileName := range []string{"default", "stm", "ltm"} {
+		profile := cfg.WriteProfiles[profileName]
+		profile.Providers = config.UpsertProviderRoute(profile.Providers, provider, required)
+		cfg.WriteProfiles[profileName] = profile
 	}
-	profile.Providers = append(profile.Providers, config.ProviderRouteConfig{Name: provider, Required: required, Weight: 1})
-	cfg.WriteProfiles["default"] = profile
 }
 
 func removeWriteRoute(cfg *config.Config, provider string) {
-	profile := cfg.WriteProfiles["default"]
-	profile.Providers = filterRoutes(profile.Providers, provider)
-	cfg.WriteProfiles["default"] = profile
-}
-
-func filterRoutes(routes []config.ProviderRouteConfig, provider string) []config.ProviderRouteConfig {
-	filtered := routes[:0]
-	for _, route := range routes {
-		if route.Name != provider {
-			filtered = append(filtered, route)
-		}
+	for _, profileName := range []string{"default", "stm", "ltm"} {
+		profile := cfg.WriteProfiles[profileName]
+		profile.Providers = config.RemoveProviderRoute(profile.Providers, provider)
+		cfg.WriteProfiles[profileName] = profile
 	}
-	return filtered
 }
 
 func defaultSelections(options []setupOption, selected map[string]bool) map[string]bool {

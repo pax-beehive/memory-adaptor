@@ -52,17 +52,18 @@ func (r runner) runUpdate(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	updater := newUpdater(options, r.stdout)
+	updater := newUpdater(options, r.stdout, r.versionString())
 	return updater.Run(context.Background())
 }
 
 type updater struct {
-	options updateOptions
-	client  *http.Client
-	stdout  io.Writer
+	options        updateOptions
+	client         *http.Client
+	stdout         io.Writer
+	currentVersion string
 }
 
-func newUpdater(options updateOptions, stdout io.Writer) updater {
+func newUpdater(options updateOptions, stdout io.Writer, currentVersion string) updater {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -75,10 +76,14 @@ func newUpdater(options updateOptions, stdout io.Writer) updater {
 	if options.apiBaseURL == "" {
 		options.apiBaseURL = "https://api.github.com"
 	}
+	if strings.TrimSpace(currentVersion) == "" {
+		currentVersion = "dev"
+	}
 	return updater{
-		options: options,
-		client:  &http.Client{Timeout: 2 * time.Minute},
-		stdout:  stdout,
+		options:        options,
+		client:         &http.Client{Timeout: 2 * time.Minute},
+		stdout:         stdout,
+		currentVersion: currentVersion,
 	}
 }
 
@@ -88,14 +93,14 @@ func (u updater) Run(ctx context.Context) error {
 		return err
 	}
 	if u.options.check {
-		if version == tag {
-			fmt.Fprintf(u.stdout, "paxm is up to date: %s\n", version)
+		if u.currentVersion == tag {
+			fmt.Fprintf(u.stdout, "paxm is up to date: %s\n", u.currentVersion)
 			return nil
 		}
-		fmt.Fprintf(u.stdout, "update available: %s -> %s\n", version, tag)
+		fmt.Fprintf(u.stdout, "update available: %s -> %s\n", u.currentVersion, tag)
 		return nil
 	}
-	if version == tag && !u.options.force {
+	if u.currentVersion == tag && !u.options.force {
 		fmt.Fprintf(u.stdout, "paxm is already at %s\n", tag)
 		return nil
 	}
@@ -133,7 +138,7 @@ func (u updater) Run(ctx context.Context) error {
 	if err := installBinary(extracted, installPath); err != nil {
 		return err
 	}
-	fmt.Fprintf(u.stdout, "updated paxm: %s -> %s\n", version, tag)
+	fmt.Fprintf(u.stdout, "updated paxm: %s -> %s\n", u.currentVersion, tag)
 	fmt.Fprintf(u.stdout, "installed: %s\n", installPath)
 	return nil
 }
@@ -146,7 +151,7 @@ func (u updater) resolveVersion(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addGitHubHeaders(request)
+	addGitHubHeaders(request, u.currentVersion)
 	response, err := u.client.Do(request)
 	if err != nil {
 		return "", err
@@ -170,7 +175,7 @@ func (u updater) download(ctx context.Context, url, path string) error {
 	if err != nil {
 		return err
 	}
-	addGitHubHeaders(request)
+	addGitHubHeaders(request, u.currentVersion)
 	response, err := u.client.Do(request)
 	if err != nil {
 		return err
@@ -206,8 +211,11 @@ func (u updater) installPath() (string, error) {
 	return filepath.EvalSymlinks(path)
 }
 
-func addGitHubHeaders(request *http.Request) {
-	request.Header.Set("User-Agent", "paxm/"+version)
+func addGitHubHeaders(request *http.Request, currentVersion string) {
+	if strings.TrimSpace(currentVersion) == "" {
+		currentVersion = "dev"
+	}
+	request.Header.Set("User-Agent", "paxm/"+currentVersion)
 	request.Header.Set("Accept", "application/vnd.github+json")
 	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
