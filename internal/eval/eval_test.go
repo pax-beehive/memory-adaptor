@@ -30,6 +30,59 @@ func TestBaselineSuiteHasOneHundredValidatedCases(t *testing.T) {
 	}
 }
 
+func TestConversationWriteSuiteHasFortyValidatedCases(t *testing.T) {
+	suite, err := Load(filepath.Join("..", "..", "evals", "conversation-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suite.Cases) != 40 {
+		t.Fatalf("conversation-write suite has %d cases, want 40", len(suite.Cases))
+	}
+	categories := map[string]int{}
+	for _, item := range suite.Cases {
+		categories[item.Category]++
+	}
+	if len(categories) != 8 {
+		t.Fatalf("conversation-write suite has %d categories, want 8", len(categories))
+	}
+	for name, count := range categories {
+		if count != 5 {
+			t.Fatalf("category %s has %d cases, want 5", name, count)
+		}
+	}
+}
+
+func TestConversationWriteSuiteHasNormalizedUserAssistantHistory(t *testing.T) {
+	suite, err := Load(filepath.Join("..", "..", "evals", "conversation-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range suite.Cases {
+		roles := map[string]bool{}
+		for _, turn := range item.Turns {
+			roles[turn.Role] = true
+			if turn.Role != "user" && turn.Role != "assistant" {
+				t.Fatalf("case %s history contains non-conversation role %q", item.ID, turn.Role)
+			}
+		}
+		if !roles["user"] || !roles["assistant"] {
+			t.Fatalf("case %s history roles = %#v; want user and assistant", item.ID, roles)
+		}
+	}
+}
+
+func TestConversationWriteSuiteIncludesRecallDistractors(t *testing.T) {
+	suite, err := Load(filepath.Join("..", "..", "evals", "conversation-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range suite.Cases {
+		if len(item.Memories) == 0 || len(item.ForbiddenRecall) == 0 {
+			t.Fatalf("case %s is missing a seeded recall distractor", item.ID)
+		}
+	}
+}
+
 func TestSuiteValidationRejectsUnknownExpectedMemory(t *testing.T) {
 	suite := Suite{Version: SuiteVersion, Name: "invalid", Cases: []Case{{
 		ID: "one", Category: "active", Memories: []Memory{{ID: "known", Text: "known fact"}},
@@ -37,6 +90,32 @@ func TestSuiteValidationRejectsUnknownExpectedMemory(t *testing.T) {
 	}}}
 	if err := suite.Validate(); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestSuiteValidationRejectsInvalidWriteAssertions(t *testing.T) {
+	base := Case{
+		ID: "write", Category: "write", Write: &Write{Event: "turn_end"},
+		Turns:  []Turn{{Role: "user", Text: "remember this"}, {Role: "assistant", Text: "done"}},
+		Recall: Recall{Mode: "active", Query: "remember this"}, ExpectedWrite: []string{"remember this"},
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Case)
+	}{
+		{name: "blank expected", mutate: func(c *Case) { c.ExpectedWrite = []string{" "} }},
+		{name: "duplicate expected", mutate: func(c *Case) { c.ExpectedWrite = []string{"fact", "FACT"} }},
+		{name: "blank forbidden", mutate: func(c *Case) { c.ForbiddenWrite = []string{""} }},
+		{name: "expected also forbidden", mutate: func(c *Case) { c.ForbiddenWrite = []string{"remember this"} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := base
+			test.mutate(&item)
+			suite := Suite{Version: SuiteVersion, Name: "invalid", Cases: []Case{item}}
+			if err := suite.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
 
@@ -57,6 +136,74 @@ func TestRunnerUsesActiveAndPassiveProductionPaths(t *testing.T) {
 	}
 }
 
+func TestRunnerWritesConversationThroughHookBeforeRecall(t *testing.T) {
+	suite := Suite{Version: SuiteVersion, Name: "conversation-write", Cases: []Case{{
+		ID:       "codex-turn-end",
+		Category: "conversation_write",
+		Turns: []Turn{
+			{Role: "user", Text: "Keep the lunar cache decision."},
+			{Role: "assistant", Text: "The lunar cache uses a seven minute TTL."},
+		},
+		Write: &Write{
+			Target:    "codex",
+			Event:     "turn_end",
+			Assistant: "The lunar cache uses a seven minute TTL.",
+			Messages: []Turn{
+				{Role: "user", Text: "Keep the lunar cache decision."},
+				{Role: "assistant", Text: "The lunar cache uses a seven minute TTL."},
+				{Role: "tool_call", Text: `Read {"path":"docs/cache.md"}`},
+				{Role: "tool_result", Text: "Cache policy confirms seven minutes."},
+				{Role: "reasoning", Text: "private scratchpad"},
+			},
+			Workspace: "/eval/lunar-cache",
+			Metadata:  map[string]string{"session_id": "session-1"},
+		},
+		Recall:           Recall{Mode: "active", Query: "lunar cache seven minute TTL", Limit: 3},
+		ExpectedWrite:    []string{"lunar cache", "seven minute TTL", "Cache policy confirms"},
+		ForbiddenWrite:   []string{"private scratchpad"},
+		ExpectedMetadata: map[string]string{"hook_target": "codex", "hook_event": "turn_end", "workspace": "/eval/lunar-cache", "session_id": "session-1"},
+	}}}
+
+	result, err := (Runner{Root: t.TempDir()}).Run(context.Background(), suite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed != 1 || result.Failed != 0 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	caseResult := result.Cases[0]
+	if !caseResult.Written || caseResult.WriteRecall != 1 || caseResult.WritePrecision != 1 {
+		t.Fatalf("unexpected write metrics: %#v", caseResult)
+	}
+	if caseResult.RecallAtK != 1 || caseResult.ReturnedContextBytes == 0 {
+		t.Fatalf("unexpected recall metrics: %#v", caseResult)
+	}
+}
+
+func TestRunnerCanWriteFromNormalizedHistory(t *testing.T) {
+	suite := Suite{Version: SuiteVersion, Name: "history-write", Cases: []Case{{
+		ID: "pi-history", Category: "history",
+		Turns: []Turn{
+			{Role: "user", Text: "Remember the aurora retention policy."},
+			{Role: "assistant", Text: "The aurora retention policy keeps thirty days."},
+		},
+		Write: &Write{
+			Target: "pi", Event: "turn_end", IncludeHistory: true,
+			Messages: []Turn{{Role: "reasoning", Text: "private scratchpad"}},
+		},
+		Recall:         Recall{Mode: "active", Query: "aurora retention thirty days", Limit: 3},
+		ExpectedWrite:  []string{"aurora retention policy", "thirty days"},
+		ForbiddenWrite: []string{"private scratchpad"},
+	}}}
+	result, err := (Runner{Root: t.TempDir()}).Run(context.Background(), suite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed != 1 {
+		t.Fatalf("normalized history was not written and recalled: %#v", result.Cases[0])
+	}
+}
+
 func TestCaseAssertionsCheckOrderLimitAndUnexpectedHits(t *testing.T) {
 	scenario := Case{Expected: []string{"best"}, ExpectedFirst: "best", MaxHits: 1}
 	result := CaseResult{HitIDs: []string{"weaker", "best"}}
@@ -69,5 +216,40 @@ func TestCaseAssertionsCheckOrderLimitAndUnexpectedHits(t *testing.T) {
 	}
 	if result.ReciprocalRank != 0.5 {
 		t.Fatalf("reciprocal rank = %v, want 0.5", result.ReciprocalRank)
+	}
+}
+
+func TestConversationWriteMetricsCountForbiddenCandidates(t *testing.T) {
+	scenario := Case{
+		ExpectedWrite:  []string{"durable decision", "seven minute TTL"},
+		ForbiddenWrite: []string{"private scratchpad", "volatile session"},
+	}
+	caseResult := CaseResult{WriteCase: true, Written: true}
+	caseResult.scoreConversationWrite(scenario, "durable decision with seven minute TTL and private scratchpad", nil, []memory.MemoryHit{{Text: "durable decision with seven minute TTL"}})
+	result := Result{CaseCount: 1, Cases: []CaseResult{caseResult}}
+	result.aggregate()
+
+	if result.WriteFalsePositiveRate != 0.5 {
+		t.Fatalf("write false-positive rate = %v, want 0.5", result.WriteFalsePositiveRate)
+	}
+	if result.WritePrecision != float64(2)/3 {
+		t.Fatalf("write precision = %v, want %v", result.WritePrecision, float64(2)/3)
+	}
+}
+
+func TestConversationWriteRequiresMetadataToSurviveRecall(t *testing.T) {
+	scenario := Case{ExpectedWrite: []string{"durable decision"}, ExpectedMetadata: map[string]string{"workspace": "/eval/project"}}
+	caseResult := CaseResult{WriteCase: true, Written: true}
+	caseResult.scoreConversationWrite(
+		scenario,
+		"durable decision",
+		map[string]string{"workspace": "/eval/project"},
+		[]memory.MemoryHit{{Text: "durable decision"}},
+	)
+	if caseResult.Passed {
+		t.Fatal("case passed even though recalled metadata was missing")
+	}
+	if len(caseResult.MetadataMismatches) != 1 {
+		t.Fatalf("metadata mismatches = %#v, want recalled workspace mismatch", caseResult.MetadataMismatches)
 	}
 }

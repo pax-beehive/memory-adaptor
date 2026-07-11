@@ -615,9 +615,20 @@ go run ./cmd/paxm eval run --suite evals/baseline
 go run ./cmd/paxm eval run --suite evals/baseline --json
 ```
 
-The runner uses an isolated SQLite database per case and reports recall@K,
-precision@K, mean reciprocal rank, forbidden-memory insertion rate, latency,
-and category-level results.
+Run the deterministic 40-case conversation-to-write baseline:
+
+```bash
+go run ./cmd/paxm eval run --suite evals/conversation-write
+go run ./cmd/paxm eval run --suite evals/conversation-write --json
+```
+
+Both suites use an isolated SQLite database per case. The retrieval baseline
+reports recall@K, precision@K, mean reciprocal rank, forbidden-memory insertion
+rate, latency, and category-level results. The conversation-to-write suite also
+reports write recall, write precision, forbidden-fragment insertion rate,
+write/recall latency totals, result count, and returned recall-content size
+after running normalized hook messages through the production hook write,
+ingest, and later recall path.
 
 ## Releases
 

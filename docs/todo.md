@@ -6,7 +6,10 @@ real-task blocker and successful remediation run are recorded in
 [`docs/acceptance/phase-1-v0.1.md`](acceptance/phase-1-v0.1.md). The compatible
 release pairing is binary `v0.1.13` with plugin `v0.1.1`. Phase 1 is complete.
 Phase 2 starts with `paxm eval run --suite evals/baseline`: a versioned,
-deterministic 100-case SQLite suite that runs in CI.
+deterministic 100-case SQLite retrieval suite that runs in CI. The second slice,
+`paxm eval run --suite evals/conversation-write`, adds 40 deterministic cases
+covering production hook writes, visible conversation and tool content,
+reasoning suppression, metadata preservation, and later recall.
 
 ## Codex Plugin Distribution
 

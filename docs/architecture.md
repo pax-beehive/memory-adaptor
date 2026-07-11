@@ -177,6 +177,18 @@ paxm [--config PATH] mcp serve
 paxm [--config PATH] config doctor
 ```
 
+Evaluation suites share the production runtime and facade. Retrieval cases can
+seed known memories before active or passive recall. Conversation-write cases
+instead keep normalized user/assistant history separate from the normalized
+hook-event messages rendered through `HookWriteItem`, persist the result through
+`IngestBatch`, and issue a later recall against a seeded harmful distractor.
+When an agent hook supplies complete turn history, the scenario explicitly
+includes that history in the rendered event rather than duplicating it into an
+assistant or tool field.
+Their reports add capture-quality metrics, result count, write and recall
+latency totals, returned recall-content bytes, and metadata survival checks
+without introducing a second hook or retrieval implementation.
+
 `user_input` runs passive recall by rendering the configured hook recall
 template into a query. The first `user_input` for a session can use the
 configured `recall.initial` override, which typically points at the looser

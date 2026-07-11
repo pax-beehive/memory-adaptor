@@ -17,10 +17,26 @@ import (
 	"github.com/pax-beehive/memory-adaptor/internal/adapters"
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
+	paxeval "github.com/pax-beehive/memory-adaptor/internal/eval"
 	"github.com/pax-beehive/memory-adaptor/internal/facade"
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 	"github.com/pax-beehive/memory-adaptor/internal/telemetry"
 )
+
+func TestEvalReportIncludesConversationWriteMetrics(t *testing.T) {
+	var output bytes.Buffer
+	writeEvalReport(&output, paxeval.Result{
+		Suite: "conversation-write", Version: 1, CaseCount: 40, Passed: 40,
+		RecallAtK: 1, PrecisionAtK: 1, MRR: 1,
+		WriteCaseCount: 40, Writes: 40, WriteRecall: 1, WritePrecision: 0.95,
+		WriteFalsePositiveRate: 0.05, ResultCount: 40, ReturnedContextBytes: 4096, WriteDurationUS: 50000, RecallDurationUS: 25000,
+	})
+	for _, expected := range []string{"writes: 40/40", "write recall: 1.000", "write precision: 0.950", "write false-positive rate: 0.050", "results: 40", "returned context: 4096 bytes", "write total: 50.000ms", "recall total: 25.000ms"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("eval report missing %q: %s", expected, output.String())
+		}
+	}
+}
 
 func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")

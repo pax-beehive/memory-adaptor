@@ -145,11 +145,14 @@ show that installation, hook trust, upgrade, disable, and rollback are reliable.
 
 ## Phase 2: Recall Evaluation Harness
 
-Status: first local retrieval baseline implemented. `evals/baseline/suite.json`
-contains 100 versioned SQLite cases and `paxm eval run` emits terminal or JSON
-results. CI runs the complete suite. Conversation-to-write evaluation,
-lifecycle/consolidation, comparison mode, deeper latency/context measurements,
-and opt-in remote-provider evaluation remain follow-up slices.
+Status: local retrieval and conversation-to-write baselines implemented.
+`evals/baseline/suite.json` contains 100 versioned SQLite retrieval cases, and
+`evals/conversation-write/suite.json` contains 40 cases with normalized
+conversation history and hook messages that execute production write, ingest,
+and later recall paths. `paxm eval run` emits terminal or JSON results and CI
+runs both suites. Lifecycle and
+consolidation scenarios, comparison mode, provider-level latency, regression
+budgets, and opt-in remote-provider evaluation remain follow-up slices.
 
 Build the evaluation harness before starting the macOS application. Its results
 will determine which policy controls and explanations the UI actually needs.

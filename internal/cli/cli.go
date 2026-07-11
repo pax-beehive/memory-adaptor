@@ -593,8 +593,15 @@ func writeEvalReport(w io.Writer, result paxeval.Result) {
 	fmt.Fprintf(w, "paxm eval: %s (v%d)\n", result.Suite, result.Version)
 	fmt.Fprintf(w, "cases: %d  passed: %d  failed: %d  duration: %dms\n", result.CaseCount, result.Passed, result.Failed, result.DurationMS)
 	fmt.Fprintf(w, "recall@k: %.3f  precision@k: %.3f  mrr: %.3f  false-positive rate: %.3f\n", result.RecallAtK, result.PrecisionAtK, result.MRR, result.FalsePositiveRate)
+	if result.WriteCaseCount > 0 {
+		fmt.Fprintf(w, "writes: %d/%d  write recall: %.3f  write precision: %.3f  write false-positive rate: %.3f\n", result.Writes, result.WriteCaseCount, result.WriteRecall, result.WritePrecision, result.WriteFalsePositiveRate)
+		fmt.Fprintf(w, "results: %d  returned context: %d bytes  write total: %.3fms  recall total: %.3fms\n", result.ResultCount, result.ReturnedContextBytes, float64(result.WriteDurationUS)/1000, float64(result.RecallDurationUS)/1000)
+	}
 	for _, group := range result.Categories {
 		fmt.Fprintf(w, "  %-20s %3d/%-3d  recall@k %.3f  precision@k %.3f  mrr %.3f\n", group.Name, group.Passed, group.CaseCount, group.RecallAtK, group.PrecisionAtK, group.MRR)
+		if group.WriteCaseCount > 0 {
+			fmt.Fprintf(w, "  %-20s write recall %.3f  write precision %.3f  write false-positive rate %.3f\n", "", group.WriteRecall, group.WritePrecision, group.WriteFalsePositiveRate)
+		}
 	}
 	for _, item := range result.Cases {
 		if item.Passed {
@@ -612,6 +619,15 @@ func writeEvalReport(w io.Writer, result paxeval.Result) {
 		}
 		if len(item.Unexpected) > 0 {
 			fmt.Fprintf(w, " unexpected=%s", strings.Join(item.Unexpected, ","))
+		}
+		if len(item.WriteMissing) > 0 {
+			fmt.Fprintf(w, " write-missing=%s", strings.Join(item.WriteMissing, ","))
+		}
+		if len(item.WriteForbidden) > 0 {
+			fmt.Fprintf(w, " write-forbidden=%s", strings.Join(item.WriteForbidden, ","))
+		}
+		if len(item.MetadataMismatches) > 0 {
+			fmt.Fprintf(w, " metadata=%s", strings.Join(item.MetadataMismatches, ","))
 		}
 		fmt.Fprintln(w)
 	}
