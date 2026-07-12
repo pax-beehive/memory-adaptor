@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/pax-beehive/memory-adaptor/internal/adapters"
+	jsonrpcadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/jsonrpc"
+	jsonrpcconformance "github.com/pax-beehive/memory-adaptor/internal/adapters/jsonrpc/conformance"
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
@@ -659,8 +661,11 @@ func (r runner) runEval(args []string) error {
 	if len(args) > 1 && args[0] == "retrieval" && args[1] == "locomo" {
 		return r.runLoCoMoEval(args[2:])
 	}
+	if len(args) > 1 && args[0] == "provider" && args[1] == "jsonrpc" {
+		return r.runJSONRPCConformance(args[2:])
+	}
 	if len(args) == 0 || args[0] != "run" {
-		return errors.New("usage: paxm eval run locomo --agent NAME [options] | paxm eval retrieval locomo [options]")
+		return errors.New("usage: paxm eval run locomo --agent NAME [options] | paxm eval retrieval locomo [options] | paxm eval provider jsonrpc --command PATH")
 	}
 	if len(args) > 1 && args[1] == "locomo" {
 		return r.runLoCoMoAgentEval(args[2:])
@@ -765,6 +770,56 @@ func (r runner) runEval(args []string) error {
 	}
 	if len(budgetFailures) > 0 {
 		return fmt.Errorf("eval regression budget failed: %d metrics outside budget", len(budgetFailures))
+	}
+	return nil
+}
+
+type stringListFlag []string
+
+func (v *stringListFlag) String() string         { return strings.Join(*v, ",") }
+func (v *stringListFlag) Set(value string) error { *v = append(*v, value); return nil }
+
+func (r runner) runJSONRPCConformance(args []string) error {
+	fs := flag.NewFlagSet("eval provider jsonrpc", flag.ContinueOnError)
+	fs.SetOutput(r.stderr)
+	command := fs.String("command", "", "provider executable")
+	timeout := fs.Duration("timeout", 10*time.Second, "timeout per RPC call")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	var commandArgs stringListFlag
+	fs.Var(&commandArgs, "arg", "provider argument; repeat as needed")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*command) == "" {
+		return errors.New("JSON-RPC conformance requires --command PATH")
+	}
+	provider, err := jsonrpcadapter.New("conformance", config.ProviderConfig{Transport: "stdio", Command: *command, Args: commandArgs, Timeout: timeout.String()})
+	if err != nil {
+		return err
+	}
+	result := jsonrpcconformance.Run(context.Background(), provider)
+	if *jsonOut {
+		if err := writeJSON(r.stdout, result); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(r.stdout, "paxm JSON-RPC provider conformance: passed=%t protocol=%s\n", result.Passed, result.Protocol)
+		for _, check := range result.Checks {
+			status := "PASS"
+			if check.Skipped {
+				status = "SKIP"
+			} else if !check.Passed {
+				status = "FAIL"
+			}
+			fmt.Fprintf(r.stdout, "  %-5s %s", status, check.Name)
+			if check.Error != "" {
+				fmt.Fprintf(r.stdout, ": %s", check.Error)
+			}
+			fmt.Fprintln(r.stdout)
+		}
+	}
+	if !result.Passed {
+		return errors.New("JSON-RPC provider failed required conformance checks")
 	}
 	return nil
 }

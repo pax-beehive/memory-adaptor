@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -22,6 +23,34 @@ import (
 	"github.com/pax-beehive/memory-adaptor/internal/memory"
 	"github.com/pax-beehive/memory-adaptor/internal/telemetry"
 )
+
+func TestEvalProviderJSONRPCPublicCommand(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "sample-provider")
+	build := exec.Command("go", "build", "-o", binary, "../../examples/jsonrpc-provider")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build sample: %v: %s", err, output)
+	}
+	t.Setenv("PAXM_SAMPLE_PROVIDER_STORE", filepath.Join(dir, "store.json"))
+	var stdout, stderr bytes.Buffer
+	exit := Main([]string{"eval", "provider", "jsonrpc", "--command", binary, "--json"}, nil, &stdout, &stderr)
+	if exit != 0 {
+		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+	}
+	var result struct {
+		Passed bool `json:"passed"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Passed bool   `json:"passed"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Passed || len(result.Checks) < 7 {
+		t.Fatalf("result=%#v", result)
+	}
+}
 
 func TestEvalReportIncludesConversationWriteMetrics(t *testing.T) {
 	var output bytes.Buffer
