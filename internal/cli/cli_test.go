@@ -51,7 +51,7 @@ func TestEvalRunLoCoMoUsesConfiguredProviderAndReturnsJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	exit := Main([]string{"--config", configPath, "eval", "run", "locomo", "--dataset", datasetPath, "--provider", "sqlite", "--manifest-dir", filepath.Join(dir, "runs"), "--run-id", "cli-test", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	exit := Main([]string{"--config", configPath, "eval", "retrieval", "locomo", "--dataset", datasetPath, "--provider", "sqlite", "--manifest-dir", filepath.Join(dir, "runs"), "--run-id", "cli-test", "--json"}, strings.NewReader(""), &stdout, &stderr)
 	if exit != 0 {
 		t.Fatalf("exit = %d, stderr = %s", exit, stderr.String())
 	}
@@ -60,6 +60,42 @@ func TestEvalRunLoCoMoUsesConfiguredProviderAndReturnsJSON(t *testing.T) {
 		t.Fatalf("decode output: %v\n%s", err, stdout.String())
 	}
 	if result.Benchmark != "locomo-text-qa-retrieval" || result.Passed != 1 || result.RecallAtK != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+type cliAgentExecutor struct{}
+
+func (cliAgentExecutor) Execute(_ context.Context, request paxeval.AgentRequest) (paxeval.AgentResponse, error) {
+	answer := "a cat"
+	if request.Arm != paxeval.AgentArmControl {
+		answer = "a dog"
+	}
+	return paxeval.AgentResponse{Text: answer, InputTokens: 10, OutputTokens: 2}, nil
+}
+
+func TestEvalRunLoCoMoUsesAgentArms(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	datasetPath := filepath.Join(dir, "locomo.json")
+	dataset := `[{"sample_id":"sample-1","qa":[{"question":"What did Alice adopt?","answer":"A dog","evidence":["D1:1"],"category":1}],"conversation":{"speaker_a":"Alice","speaker_b":"Bob","session_1_date_time":"1 June 2023","session_1":[{"speaker":"Alice","dia_id":"D1:1","text":"I adopted a dog."}]}}]`
+	if err := os.WriteFile(datasetPath, []byte(dataset), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exit := MainWithDependencies([]string{"--config", configPath, "eval", "run", "locomo", "--dataset", datasetPath, "--agent", "opencode", "--provider", "sqlite", "--max-questions", "1", "--manifest-dir", filepath.Join(dir, "runs"), "--run-id", "agent-cli-test", "--json"}, nil, &stdout, &stderr, Dependencies{AgentExecutor: cliAgentExecutor{}})
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %s", exit, stderr.String())
+	}
+	var result paxeval.LoCoMoAgentResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.QuestionCount != 1 || result.TrialCount != 3 || result.PassiveLift != 1 || result.ActiveLift != 1 {
 		t.Fatalf("result = %#v", result)
 	}
 }

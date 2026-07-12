@@ -45,6 +45,7 @@ type Dependencies struct {
 	Version            string
 	EnsureZepUser      ensureZepUserFunc
 	ShutdownHookDaemon shutdownHookDaemonFunc
+	AgentExecutor      paxeval.AgentExecutor
 }
 
 type runner struct {
@@ -55,6 +56,7 @@ type runner struct {
 	version            string
 	ensureZepUser      ensureZepUserFunc
 	shutdownHookDaemon shutdownHookDaemonFunc
+	agentExecutor      paxeval.AgentExecutor
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -85,6 +87,7 @@ func MainWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Writ
 		version:            deps.Version,
 		ensureZepUser:      deps.EnsureZepUser,
 		shutdownHookDaemon: deps.ShutdownHookDaemon,
+		agentExecutor:      deps.AgentExecutor,
 	}
 	if len(args) == 0 {
 		r.printHelp()
@@ -651,11 +654,14 @@ func (r runner) runEval(args []string) error {
 	if len(args) > 0 && args[0] == "cleanup" {
 		return r.runEvalCleanup(args[1:])
 	}
+	if len(args) > 1 && args[0] == "retrieval" && args[1] == "locomo" {
+		return r.runLoCoMoEval(args[2:])
+	}
 	if len(args) == 0 || args[0] != "run" {
-		return errors.New("usage: paxm eval run [locomo] [options]")
+		return errors.New("usage: paxm eval run locomo --agent NAME [options] | paxm eval retrieval locomo [options]")
 	}
 	if len(args) > 1 && args[1] == "locomo" {
-		return r.runLoCoMoEval(args[2:])
+		return r.runLoCoMoAgentEval(args[2:])
 	}
 	fs := flag.NewFlagSet("eval run", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
@@ -824,8 +830,149 @@ func (r runner) runEvalCleanup(args []string) error {
 	return nil
 }
 
-func (r runner) runLoCoMoEval(args []string) error {
+func (r runner) runLoCoMoAgentEval(args []string) error {
 	fs := flag.NewFlagSet("eval run locomo", flag.ContinueOnError)
+	fs.SetOutput(r.stderr)
+	datasetPath := fs.String("dataset", "", "path to the official locomo10.json dataset")
+	agentName := fs.String("agent", "", "agent runtime to evaluate (opencode)")
+	agentBinary := fs.String("agent-binary", "", "agent executable path")
+	model := fs.String("model", "", "agent model override")
+	providerName := fs.String("provider", "sqlite", "configured provider name")
+	armsValue := fs.String("arms", "control,passive,active", "comma-separated control, passive, active arms")
+	maxQuestions := fs.Int("max-questions", 0, "limit paid agent questions")
+	allQuestions := fs.Bool("all", false, "run every eligible LoCoMo question")
+	matchThreshold := fs.Float64("match-threshold", 0.5, "token-F1 threshold for a matched answer")
+	manifestDir := fs.String("manifest-dir", filepath.Join(filepath.Dir(config.DefaultDataPath()), "eval-runs"), "eval run manifest directory")
+	runID := fs.String("run-id", "", "stable eval run id")
+	settle := fs.Duration("settle", 0, "wait after ingest before agent questions")
+	timeout := fs.Duration("timeout", 3*time.Minute, "timeout for each agent call")
+	keepMemory := fs.Bool("keep-memory", false, "intentionally retain benchmark memories")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	outputPath := fs.String("output", "", "write result JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*datasetPath) == "" || strings.TrimSpace(*agentName) == "" {
+		return errors.New("LoCoMo agent evaluation requires --dataset PATH and --agent NAME")
+	}
+	if *maxQuestions <= 0 && !*allQuestions {
+		return errors.New("LoCoMo agent evaluation makes paid model calls; choose --max-questions N or explicitly pass --all")
+	}
+	if *maxQuestions < 0 || *matchThreshold <= 0 || *matchThreshold > 1 || *timeout <= 0 {
+		return errors.New("invalid LoCoMo agent evaluation limits")
+	}
+	arms, err := parseAgentArms(*armsValue)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(paxruntime.ConfigFile(r.configPath))
+	if err != nil {
+		return err
+	}
+	dataset, err := paxeval.LoadLoCoMo(*datasetPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*runID) == "" {
+		*runID = newHookEventID()
+	}
+	executor := r.agentExecutor
+	if executor == nil {
+		if *agentName != "opencode" {
+			return fmt.Errorf("agent %q is not supported", *agentName)
+		}
+		binary, findErr := findOpenCodeBinary(*agentBinary)
+		if findErr != nil {
+			return findErr
+		}
+		paxmBinary, executableErr := os.Executable()
+		if executableErr != nil {
+			return executableErr
+		}
+		executor = paxeval.OpenCodeExecutor{Binary: binary, PaxmBinary: paxmBinary, Model: *model, Timeout: *timeout}
+	}
+	registry := adapters.DefaultRegistry()
+	result, runErr := (paxeval.LoCoMoAgentRunner{BuildProvider: registry.BuildProvider, Agent: executor}).Run(context.Background(), dataset, paxeval.LoCoMoAgentOptions{
+		Config: cfg, Provider: *providerName, RunID: *runID, ManifestDir: *manifestDir,
+		AgentName: *agentName, Arms: arms, MaxQuestions: *maxQuestions, MatchThreshold: *matchThreshold,
+		KeepMemory: *keepMemory, Settle: *settle,
+	})
+	if *outputPath != "" {
+		data, marshalErr := json.MarshalIndent(result, "", "  ")
+		if marshalErr != nil {
+			return errors.Join(runErr, marshalErr)
+		}
+		if writeErr := os.WriteFile(*outputPath, append(data, '\n'), 0o600); writeErr != nil {
+			return errors.Join(runErr, writeErr)
+		}
+	}
+	if *jsonOut {
+		if err := writeJSON(r.stdout, result); err != nil {
+			return errors.Join(runErr, err)
+		}
+	} else {
+		writeLoCoMoAgentReport(r.stdout, result)
+	}
+	if runErr != nil {
+		return runErr
+	}
+	for _, summary := range result.Summaries {
+		if summary.Errors > 0 {
+			return fmt.Errorf("LoCoMo agent eval %s arm had %d execution errors", summary.Arm, summary.Errors)
+		}
+	}
+	return nil
+}
+
+func parseAgentArms(value string) ([]paxeval.AgentArm, error) {
+	seen := make(map[paxeval.AgentArm]bool)
+	var arms []paxeval.AgentArm
+	for _, item := range strings.Split(value, ",") {
+		arm := paxeval.AgentArm(strings.TrimSpace(item))
+		switch arm {
+		case paxeval.AgentArmControl, paxeval.AgentArmPassive, paxeval.AgentArmActive:
+		default:
+			return nil, fmt.Errorf("unsupported eval arm %q", item)
+		}
+		if !seen[arm] {
+			seen[arm] = true
+			arms = append(arms, arm)
+		}
+	}
+	if len(arms) == 0 {
+		return nil, errors.New("at least one eval arm is required")
+	}
+	return arms, nil
+}
+
+func findOpenCodeBinary(explicit string) (string, error) {
+	if strings.TrimSpace(explicit) != "" {
+		return config.ExpandPath(explicit), nil
+	}
+	if path, err := exec.LookPath("opencode"); err == nil {
+		return path, nil
+	}
+	home, _ := os.UserHomeDir()
+	candidate := filepath.Join(home, ".opencode", "bin", "opencode")
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate, nil
+	}
+	return "", errors.New("OpenCode binary not found; pass --agent-binary PATH")
+}
+
+func writeLoCoMoAgentReport(w io.Writer, result paxeval.LoCoMoAgentResult) {
+	fmt.Fprintf(w, "paxm eval: %s  agent=%s  provider=%s\n", result.Benchmark, result.Agent, result.Provider)
+	fmt.Fprintf(w, "  questions: %d  trials: %d  duration: %s\n", result.QuestionCount, result.TrialCount, time.Duration(result.DurationMS)*time.Millisecond)
+	for _, summary := range result.Summaries {
+		fmt.Fprintf(w, "  %-7s accuracy %.1f%%  mean-f1 %.3f  exact %.1f%%  recall-used %d/%d  useful %.1f%%  errors %d  tokens %d/%d  cost $%.4f\n",
+			summary.Arm, summary.Accuracy*100, summary.MeanF1, summary.ExactMatch*100, summary.RecallUsed, summary.Trials, summary.UsefulRecallRate*100,
+			summary.Errors, summary.InputTokens, summary.OutputTokens, summary.Cost)
+	}
+	fmt.Fprintf(w, "  memory lift: passive %+.1fpp  active %+.1fpp\n", result.PassiveLift*100, result.ActiveLift*100)
+}
+
+func (r runner) runLoCoMoEval(args []string) error {
+	fs := flag.NewFlagSet("eval retrieval locomo", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
 	datasetPath := fs.String("dataset", "", "path to the official locomo10.json dataset")
 	providerName := fs.String("provider", "sqlite", "configured provider name")
@@ -2082,7 +2229,8 @@ func (r runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill status --agent AGENT --provider NAME")
 	fmt.Fprintln(r.stdout, "  paxm eval run [--suite PATH] [--json]")
-	fmt.Fprintln(r.stdout, "  paxm eval run locomo --dataset PATH --provider NAME [--json]")
+	fmt.Fprintln(r.stdout, "  paxm eval run locomo --dataset PATH --agent NAME --provider NAME (--max-questions N | --all)")
+	fmt.Fprintln(r.stdout, "  paxm eval retrieval locomo --dataset PATH --provider NAME [--json]")
 	fmt.Fprintln(r.stdout, "  paxm eval cleanup (--run RUN_ID | --stale)")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] mcp serve")
 	fmt.Fprintln(r.stdout, "  paxm update [--check] [--version VERSION]")

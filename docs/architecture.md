@@ -173,7 +173,8 @@ paxm [--config PATH] backfill scan --agent AGENT [--before TIME]
 paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]
 paxm [--config PATH] backfill status --agent AGENT --provider NAME
 paxm eval run [--suite PATH] [--gate quality|adapter|none] [--json] [--compare RESULT.json] [--budget BUDGET.json] [--output RESULT.json]
-paxm eval run locomo --dataset PATH --provider NAME [--limit N] [--settle DURATION] [--keep-memory] [--json] [--output RESULT.json]
+paxm eval run locomo --dataset PATH --agent NAME --provider NAME (--max-questions N | --all) [--arms control,passive,active] [--json] [--output RESULT.json]
+paxm eval retrieval locomo --dataset PATH --provider NAME [--limit N] [--settle DURATION] [--keep-memory] [--json] [--output RESULT.json]
 paxm eval cleanup (--run RUN_ID | --stale) [--manifest-dir PATH]
 paxm [--config PATH] mcp serve
 paxm [--config PATH] config doctor
@@ -191,14 +192,19 @@ Their reports add capture-quality metrics, result count, write and recall
 latency totals, returned recall-content bytes, and metadata survival checks
 without introducing a second hook or retrieval implementation.
 
-The LoCoMo runner evaluates the provider boundary directly because the public
-dataset already contains normalized dialogue turns and evidence IDs. Each
-conversation gets a provider-specific isolated scope and an atomic manifest of
-created refs. SQLite databases are disposable, Mem0 uses a unique run scope,
-and Zep uses a unique graph. Cleanup is attempted on both success and failure;
-unsupported remote providers fail closed unless the caller explicitly chooses
-`--keep-memory`. Stale manifests make interrupted remote runs recoverable with
-`paxm eval cleanup`.
+The primary LoCoMo runner evaluates a real agent in fresh control, passive, and
+active sessions. Passive uses the agent's lifecycle hook and active uses the
+same paxm MCP server exposed to users. It reports deterministic normalized
+answer F1 and memory lift rather than claiming compatibility with the official
+LLM-judge accuracy. Direct evidence Recall@K remains under `eval retrieval` as
+a diagnostic for explaining agent failures.
+
+Both modes give each conversation a provider-specific isolated scope and an
+atomic manifest of created refs. SQLite databases are disposable, Mem0 uses a
+unique run scope, and Zep uses a unique graph. Cleanup is attempted on both
+success and failure; unsupported remote providers fail closed unless the
+caller explicitly chooses `--keep-memory`. Stale manifests make interrupted
+remote runs recoverable with `paxm eval cleanup`.
 
 `user_input` runs passive recall by rendering the configured hook recall
 template into a query. The first `user_input` for a session can use the
