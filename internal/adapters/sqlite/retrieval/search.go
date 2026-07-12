@@ -10,15 +10,15 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const RawScoreKind = "sqlite_fts_bm25_negated"
 
 type Request struct {
-	Text  string
-	Limit int
-	Tiers []string
+	Text      string
+	Limit     int
+	Tiers     []string
+	Workspace string
 }
 
 type Hit struct {
@@ -35,7 +35,7 @@ type Hit struct {
 }
 
 func Search(ctx context.Context, db *sql.DB, request Request) ([]Hit, error) {
-	terms := normalizeTerms(request.Text)
+	terms := analyze(request.Text)
 	if len(terms) == 0 {
 		return searchRecent(ctx, db, request)
 	}
@@ -72,27 +72,79 @@ func searchRecent(ctx context.Context, db *sql.DB, request Request) ([]Hit, erro
 	return hits, nil
 }
 
-func searchFTS(ctx context.Context, db *sql.DB, request Request, terms []string) ([]Hit, error) {
+func searchFTS(ctx context.Context, db *sql.DB, request Request, terms analysis) ([]Hit, error) {
 	filterSQL, filterArgs := filterClause(request, "m")
-	args := append([]any{matchQuery(terms)}, filterArgs...)
+	args := append([]any{matchQuery(terms.canonicalTerms())}, filterArgs...)
 	args = append(args, candidateLimit(request.Limit))
-	rows, err := db.QueryContext(ctx, `
+	hits, err := queryCandidates(ctx, db, `
 	SELECT m.id, m.text, m.source, m.metadata_json, m.created_at, m.tier, m.expires_at, bm25(memory_fts) AS rank
 	FROM memory_fts
 	JOIN memories AS m ON m.rowid = memory_fts.rowid
 	WHERE memory_fts MATCH ? AND `+filterSQL+`
 	ORDER BY rank ASC, m.created_at DESC
 	LIMIT ?
-	`, args...)
+	`, true, args...)
+	if err != nil {
+		return nil, err
+	}
+	queryTerms := terms.canonicalTerms()
+	if terms.needsSupplement(request.Text) && !hasEnoughExactMatches(hits, queryTerms, resultLimit(request.Limit)) {
+		likeSQL, likeArgs := likeClause(terms, "m")
+		likeArgs = append(likeArgs, filterArgs...)
+		likeArgs = append(likeArgs, candidateLimit(request.Limit))
+		likeHits, err := queryCandidates(ctx, db, `
+	SELECT m.id, m.text, m.source, m.metadata_json, m.created_at, m.tier, m.expires_at
+	FROM memories AS m
+	WHERE (`+likeSQL+`) AND `+filterSQL+`
+	ORDER BY m.created_at DESC
+	LIMIT ?
+	`, false, likeArgs...)
+		if err != nil {
+			return nil, err
+		}
+		hits = mergeHits(hits, likeHits)
+	}
+	scored := hits[:0]
+	for _, hit := range hits {
+		hit.Score = score(queryTerms, hit.Text)
+		if hit.Score > 0 {
+			scored = append(scored, hit)
+		}
+	}
+	sortHits(scored)
+	if request.Limit > 0 && len(scored) > request.Limit {
+		scored = scored[:request.Limit]
+	}
+	return scored, nil
+}
+
+func hasEnoughExactMatches(hits []Hit, queryTerms []string, required int) bool {
+	exact := 0
+	for _, hit := range hits {
+		if score(queryTerms, hit.Text) == 1 {
+			exact++
+			if exact >= required {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func queryCandidates(ctx context.Context, db *sql.DB, statement string, ranked bool, args ...any) ([]Hit, error) {
+	rows, err := db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-
 	var hits []Hit
 	for rows.Next() {
 		var rank sql.NullFloat64
-		hit, err := scanHit(rows, &rank)
+		var rankTarget *sql.NullFloat64
+		if ranked {
+			rankTarget = &rank
+		}
+		hit, err := scanHit(rows, rankTarget)
 		if err != nil {
 			return nil, err
 		}
@@ -101,20 +153,24 @@ func searchFTS(ctx context.Context, db *sql.DB, request Request, terms []string)
 			hit.RawScore = &rawScore
 			hit.RawScoreKind = RawScoreKind
 		}
-		hit.Score = score(terms, hit.Text)
-		if hit.Score > 0 {
-			hits = append(hits, hit)
+		hits = append(hits, hit)
+	}
+	return hits, rows.Err()
+}
+
+func mergeHits(primary, secondary []Hit) []Hit {
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	merged := make([]Hit, 0, len(primary)+len(secondary))
+	for _, group := range [][]Hit{primary, secondary} {
+		for _, hit := range group {
+			if _, ok := seen[hit.ID]; ok {
+				continue
+			}
+			seen[hit.ID] = struct{}{}
+			merged = append(merged, hit)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	sortHits(hits)
-	if request.Limit > 0 && len(hits) > request.Limit {
-		hits = hits[:request.Limit]
-	}
-	return hits, nil
+	return merged
 }
 
 type rowScanner interface {
@@ -166,7 +222,35 @@ func filterClause(request Request, alias string) (string, []any) {
 		}
 		clauses = append(clauses, prefix+"tier IN ("+strings.Join(placeholders, ", ")+")")
 	}
+	if request.Workspace != "" {
+		clauses = append(clauses, "COALESCE(json_extract("+prefix+"metadata_json, '$.workspace'), '') IN ('', ?)")
+		args = append(args, request.Workspace)
+	}
 	return strings.Join(clauses, " AND "), args
+}
+
+func likeClause(terms analysis, alias string) (string, []any) {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	clauses := make([]string, 0, len(terms))
+	args := make([]any, 0, len(terms))
+	for _, term := range terms {
+		variants := make([]string, 0, len(term.patterns))
+		for _, pattern := range term.patterns {
+			variants = append(variants, "lower("+prefix+"text) LIKE ? ESCAPE '\\'")
+			args = append(args, "%"+escapeLike(pattern)+"%")
+		}
+		clauses = append(clauses, "("+strings.Join(variants, " OR ")+")")
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
 func matchQuery(terms []string) string {
@@ -183,16 +267,7 @@ func matchQuery(terms []string) string {
 }
 
 func normalizeTerms(text string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	terms := fields[:0]
-	for _, field := range fields {
-		if field = strings.TrimSpace(field); field != "" {
-			terms = append(terms, field)
-		}
-	}
-	return terms
+	return analyze(text).canonicalTerms()
 }
 
 func score(queryTerms []string, text string) float64 {
@@ -212,12 +287,13 @@ func score(queryTerms []string, text string) float64 {
 	}
 	seenQuery := make(map[string]struct{}, len(queryTerms))
 	matched := 0
+	lowerText := strings.ToLower(text)
 	for _, term := range queryTerms {
 		if _, seen := seenQuery[term]; seen {
 			continue
 		}
 		seenQuery[term] = struct{}{}
-		if _, ok := textSet[term]; ok {
+		if _, ok := textSet[term]; ok || strings.Contains(lowerText, term) {
 			matched++
 		}
 	}

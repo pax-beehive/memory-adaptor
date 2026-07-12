@@ -77,6 +77,17 @@ tools, CLI, and MCP do not depend on retrieval plans or FTS details. This seam
 keeps future retrieval changes local and allows the module to move without
 changing agent-facing interfaces.
 
+Candidate retrieval combines FTS5 with a bounded, deterministic lexical
+analyzer for camel/snake identifiers, paths, versions, error codes, CJK
+substrings, conservative morphology, and a small product alias vocabulary. It
+does not call an embedding model or perform open-ended semantic expansion.
+FTS5 remains the fast path. The rg-like text scan runs only when analysis is
+needed and FTS5 has no full match; its all-term predicate prevents partial-match
+noise from consuming the bounded ranking pool.
+When a query carries `metadata.workspace`, SQLite excludes rows owned by a
+different workspace in SQL before scoring; unscoped memories remain visible as
+shared memories for compatibility with the provider contract.
+
 ## Recall Profiles
 
 A recall profile is the policy boundary for reads. It chooses:

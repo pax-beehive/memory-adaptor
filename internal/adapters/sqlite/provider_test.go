@@ -128,6 +128,38 @@ func TestProviderSearchFiltersTierAndExpiry(t *testing.T) {
 	}
 }
 
+func TestProviderSearchHardFiltersWorkspace(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []memory.MemoryItem{
+		{Text: "atlas deployment region us-west-1", Metadata: map[string]string{"workspace": "/work/atlas"}},
+		{Text: "atlas deployment region us-east-1", Metadata: map[string]string{"workspace": "/work/other"}},
+		{Text: "atlas deployment region global", Metadata: nil},
+	} {
+		if _, err := provider.Put(context.Background(), item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{
+		Text: "atlas deployment region", Limit: 5, Metadata: map[string]string{"workspace": "/work/atlas"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("workspace-filtered hits = %#v", hits)
+	}
+	for _, hit := range hits {
+		if hit.Metadata["workspace"] == "/work/other" {
+			t.Fatalf("cross-workspace hit leaked: %#v", hit)
+		}
+	}
+}
+
 func TestProviderRejectsLifecycleFingerprintConflict(t *testing.T) {
 	t.Parallel()
 
