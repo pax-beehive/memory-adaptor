@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "name": "sqlite-retrieval-workspace-hard-gate-5",
+  "cases": [
+    {
+      "id": "workspace_scope-01",
+      "category": "workspace_scope",
+      "memories": [
+        {
+          "id": "workspace_scope-01-target",
+          "text": "Project atlas deployment region is us-west-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/atlas"
+          }
+        },
+        {
+          "id": "workspace_scope-01-forbidden",
+          "text": "Project atlas deployment region is us-east-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/other-atlas"
+          }
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "atlas deployment region",
+        "limit": 3,
+        "metadata": {
+          "workspace": "/eval/workspace/atlas"
+        }
+      },
+      "expected": [
+        "workspace_scope-01-target"
+      ],
+      "forbidden": [
+        "workspace_scope-01-forbidden"
+      ]
+    },
+    {
+      "id": "workspace_scope-02",
+      "category": "workspace_scope",
+      "memories": [
+        {
+          "id": "workspace_scope-02-target",
+          "text": "Project borealis deployment region is eu-central-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/borealis"
+          }
+        },
+        {
+          "id": "workspace_scope-02-forbidden",
+          "text": "Project borealis deployment region is us-east-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/other-borealis"
+          }
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "borealis deployment region",
+        "limit": 3,
+        "metadata": {
+          "workspace": "/eval/workspace/borealis"
+        }
+      },
+      "expected": [
+        "workspace_scope-02-target"
+      ],
+      "forbidden": [
+        "workspace_scope-02-forbidden"
+      ]
+    },
+    {
+      "id": "workspace_scope-03",
+      "category": "workspace_scope",
+      "memories": [
+        {
+          "id": "workspace_scope-03-target",
+          "text": "Project cinder deployment region is ap-southeast-2.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/cinder"
+          }
+        },
+        {
+          "id": "workspace_scope-03-forbidden",
+          "text": "Project cinder deployment region is us-east-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/other-cinder"
+          }
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "cinder deployment region",
+        "limit": 3,
+        "metadata": {
+          "workspace": "/eval/workspace/cinder"
+        }
+      },
+      "expected": [
+        "workspace_scope-03-target"
+      ],
+      "forbidden": [
+        "workspace_scope-03-forbidden"
+      ]
+    },
+    {
+      "id": "workspace_scope-04",
+      "category": "workspace_scope",
+      "memories": [
+        {
+          "id": "workspace_scope-04-target",
+          "text": "Project delta deployment region is us-east-2.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/delta"
+          }
+        },
+        {
+          "id": "workspace_scope-04-forbidden",
+          "text": "Project delta deployment region is us-east-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/other-delta"
+          }
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "delta deployment region",
+        "limit": 3,
+        "metadata": {
+          "workspace": "/eval/workspace/delta"
+        }
+      },
+      "expected": [
+        "workspace_scope-04-target"
+      ],
+      "forbidden": [
+        "workspace_scope-04-forbidden"
+      ]
+    },
+    {
+      "id": "workspace_scope-05",
+      "category": "workspace_scope",
+      "memories": [
+        {
+          "id": "workspace_scope-05-target",
+          "text": "Project ember deployment region is eu-west-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/ember"
+          }
+        },
+        {
+          "id": "workspace_scope-05-forbidden",
+          "text": "Project ember deployment region is us-east-1.",
+          "tier": "ltm",
+          "metadata": {
+            "workspace": "/eval/workspace/other-ember"
+          }
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "ember deployment region",
+        "limit": 3,
+        "metadata": {
+          "workspace": "/eval/workspace/ember"
+        }
+      },
+      "expected": [
+        "workspace_scope-05-target"
+      ],
+      "forbidden": [
+        "workspace_scope-05-forbidden"
+      ]
+    }
+  ]
+}
