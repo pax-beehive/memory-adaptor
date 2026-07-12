@@ -15,23 +15,24 @@ near distractor so broad matching alone cannot pass.
 property, not an aggregate relevance tradeoff. Its target budget requires every
 case to pass with zero false positives.
 
-The current SQLite implementation is expected to fail these suites. CI runs both
-with `--gate none`, so execution errors fail the job while retrieval-quality
-failures remain visible reports. `target-budget.json` and
-`workspace-target-budget.json` record the intended graduation criteria; neither
-is enforced until the implementation reaches them without regressing the
+The main challenge remains a non-gating report while explicit query planning is
+implemented. Workspace isolation has graduated to a hard CI gate alongside the
 existing 100-case baseline.
 
-On 2026-07-12, the current implementation passed 8 of 32 main-challenge cases
-with Recall@K 0.500, Precision@K 0.359, MRR 0.422, and false-positive rate
-0.515. It passed 0 of 5 workspace cases, with false-positive rate 0.500. The
-existing baseline still passed 100 of 100 cases.
+On 2026-07-12, the lightweight analyzer raised the main challenge from 8 to 24
+of 32 passing cases, with Recall@K 1.000, Precision@K 0.859, MRR 0.922, and
+false-positive rate 0.256. Identifier splitting, bounded aliases, conservative
+morphology, CJK substrings, relaxed fallback, and workspace isolation all pass.
+The remaining failures cover strict partial suppression and long-noise ranking.
+The workspace suite passes 5 of 5 with zero false positives, and the existing
+baseline passes 100 of 100.
 
 Run the challenges:
 
 ```sh
 paxm eval run --suite evals/sqlite-retrieval/suite.json --gate none
-paxm eval run --suite evals/sqlite-retrieval/workspace-suite.json --gate none
+paxm eval run --suite evals/sqlite-retrieval/workspace-suite.json --gate quality \
+  --budget evals/sqlite-retrieval/workspace-target-budget.json
 ```
 
 Regenerate both suites only after intentionally changing the source matrix:
@@ -40,8 +41,8 @@ Regenerate both suites only after intentionally changing the source matrix:
 go run ./evals/sqlite-retrieval/generate
 ```
 
-Graduation requires all three gates. The existing baseline remains a mandatory
-regression gate when the challenge moves from reporting to enforcement in CI:
+Full graduation requires all three gates. CI already enforces the baseline and
+workspace commands; the aggregate challenge remains the final target:
 
 ```sh
 paxm eval run --suite evals/baseline --gate quality \

@@ -119,6 +119,7 @@ func benchmarkRecallQueries(b *testing.B, provider *Provider, corpusSize int) {
 	}{
 		{name: "hit", text: fmt.Sprintf("benchmarker%06d", corpusSize/2)},
 		{name: "miss", text: "absentmarkerbenchmark"},
+		{name: "analyzer-fallback-miss", text: "absent analyzer terms"},
 	}
 	for _, query := range queries {
 		b.Run(query.name, func(b *testing.B) {

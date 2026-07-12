@@ -53,6 +53,7 @@ snapshots. These are regression references, not cross-machine guarantees.
 | 10,000 x 256 B | miss | 0.434 ms | 12,673 | 332 |
 | 100,000 x 256 B | hit | 0.540 ms | 14,506 | 359 |
 | 100,000 x 256 B | miss | 0.485 ms | 12,672 | 332 |
+| 100,000 x 256 B | analyzer fallback miss | 54.4 ms | 4,136 | 99 |
 | 1,000 x 8 KiB | hit | 0.528 ms | 40,176 | 359 |
 | 1,000 x 8 KiB | miss | 0.429 ms | 13,148 | 332 |
 | 1,000 x 32 KiB | hit | 0.610 ms | 120,760 | 359 |
@@ -67,3 +68,8 @@ close behavior. Payload construction, corpus seeding, and temporary database
 creation are outside timed recall sections. Batch timing includes construction
 of the `MemoryItem` slice and unique IDs because that work occurs on the passive
 delivery path.
+
+The analyzer fallback row was added on 2026-07-12 using a 20-iteration local
+run on the same Apple M4 class of machine. It characterizes the intentional
+linear rg-like fallback when FTS5 has no full match; ordinary exact hit and miss
+queries remain on the indexed path.

@@ -52,7 +52,10 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 		return nil, err
 	}
 	tiers := memory.NormalizeTiers(query.Tiers)
-	request := retrieval.Request{Text: query.Text, Limit: query.Limit, Tiers: make([]string, len(tiers))}
+	request := retrieval.Request{
+		Text: query.Text, Limit: query.Limit, Tiers: make([]string, len(tiers)),
+		Workspace: strings.TrimSpace(query.Metadata["workspace"]),
+	}
 	for i, tier := range tiers {
 		request.Tiers[i] = string(tier)
 	}

@@ -40,6 +40,89 @@ func TestSearchOwnsSQLiteRecallBehavior(t *testing.T) {
 	}
 }
 
+func TestSearchUsesLightweightAnalyzerForLexicalCandidates(t *testing.T) {
+	t.Parallel()
+	db := openTestDatabase(t)
+	now := time.Now().UTC()
+	items := []struct{ id, text string }{
+		{"camel", "providerSearchTimeout is enabled"},
+		{"cjk", "生产环境部署区域是美国西部一区"},
+		{"morphology", "deployment application decision"},
+		{"alias", "repository migration decision"},
+	}
+	for i, item := range items {
+		insertTestMemory(t, db, item.id, item.text, "test", `{}`, now.Add(time.Duration(i)*time.Second), "ltm", "")
+	}
+	queries := map[string]string{
+		"provider search timeout": "camel",
+		"部署区域":                    "cjk",
+		"deploy application":      "morphology",
+		"repo migration":          "alias",
+		"deploy":                  "morphology",
+		"repo":                    "alias",
+	}
+	for query, wantID := range queries {
+		t.Run(query, func(t *testing.T) {
+			hits, err := Search(context.Background(), db, Request{Text: query, Limit: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(hits) != 1 || hits[0].ID != wantID {
+				t.Fatalf("Search(%q) = %#v, want %s", query, hits, wantID)
+			}
+		})
+	}
+}
+
+func TestSearchKeepsCompleteIdentifierBeyondFTSCandidateLimit(t *testing.T) {
+	t.Parallel()
+	db := openTestDatabase(t)
+	now := time.Now().UTC()
+	insertTestMemory(t, db, "target", "providerSearchTimeout is enabled", "test", `{}`, now.Add(-time.Hour), "ltm", "")
+	for i := 0; i < 75; i++ {
+		insertTestMemory(t, db, "noise-"+strconv.Itoa(i), "provider note "+strconv.Itoa(i), "test", `{}`, now.Add(time.Duration(i)*time.Second), "ltm", "")
+	}
+	hits, err := Search(context.Background(), db, Request{Text: "provider search timeout", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].ID != "target" {
+		t.Fatalf("identifier pressure hits = %#v", hits)
+	}
+}
+
+func TestSearchDoesNotLetExactHitHideExpandedHit(t *testing.T) {
+	t.Parallel()
+	db := openTestDatabase(t)
+	now := time.Now().UTC()
+	insertTestMemory(t, db, "exact", "repo", "test", `{}`, now, "ltm", "")
+	insertTestMemory(t, db, "expanded", "repository migration", "test", `{}`, now.Add(-time.Second), "ltm", "")
+	hits, err := Search(context.Background(), db, Request{Text: "repo", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("mixed exact and expanded hits = %#v", hits)
+	}
+}
+
+func TestAnalyzeSplitsIdentifiersAndCanonicalizesBoundedVocabulary(t *testing.T) {
+	t.Parallel()
+	tests := map[string][]string{
+		"providerSearchTimeout":       {"provider", "search", "timeout"},
+		"PAXM_INSTALL_DIR":            {"paxm", "install", "dir"},
+		"workspace_filter_enabled":    {"workspace", "filter", "enabled"},
+		"internal/provider/search.go": {"internal", "provider", "search", "go"},
+		"deployment retries config":   {"deploy", "retry", "config"},
+		"数据库迁移":                       {"数据库迁移"},
+	}
+	for input, want := range tests {
+		if got := analyze(input).canonicalTerms(); !reflect.DeepEqual(got, want) {
+			t.Errorf("analyze(%q) = %#v, want %#v", input, got, want)
+		}
+	}
+}
+
 func openTestDatabase(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")

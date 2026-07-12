@@ -43,11 +43,11 @@ jobs:
         run: |
           sh -n plugins/paxm-memory/scripts/*.sh plugins/paxm-memory/hooks/*.sh
           sh plugins/paxm-memory/scripts/install-paxm_test.sh
-      - name: Report 100-case provider benchmark (non-gating)
-        run: go run ./cmd/paxm eval run --suite evals/baseline --gate none
+      - name: Enforce 100-case provider baseline
+        run: go run ./cmd/paxm eval run --suite evals/baseline --gate quality --budget evals/baseline/budget.json
       - name: Report SQLite retrieval challenge (non-gating)
-        run: |
-          go run ./cmd/paxm eval run --suite evals/sqlite-retrieval/suite.json --gate none
-          go run ./cmd/paxm eval run --suite evals/sqlite-retrieval/workspace-suite.json --gate none
+        run: go run ./cmd/paxm eval run --suite evals/sqlite-retrieval/suite.json --gate none
+      - name: Enforce SQLite workspace isolation
+        run: go run ./cmd/paxm eval run --suite evals/sqlite-retrieval/workspace-suite.json --gate quality --budget evals/sqlite-retrieval/workspace-target-budget.json
       - name: Run 50-case adapter write contract
         run: go run ./cmd/paxm eval run --suite evals/conversation-write --gate adapter
