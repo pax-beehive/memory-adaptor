@@ -38,6 +38,63 @@ func TestEvalReportIncludesConversationWriteMetrics(t *testing.T) {
 	}
 }
 
+func TestEvalRunLoCoMoUsesConfiguredProviderAndReturnsJSON(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	datasetPath := filepath.Join(dir, "locomo.json")
+	dataset := `[{"sample_id":"sample-1","qa":[{"question":"What did Alice adopt?","answer":"A dog","evidence":["D1:1"],"category":1}],"conversation":{"speaker_a":"Alice","speaker_b":"Bob","session_1_date_time":"1 June 2023","session_1":[{"speaker":"Alice","dia_id":"D1:1","text":"I adopted a dog."}]}}]`
+	if err := os.WriteFile(datasetPath, []byte(dataset), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exit := Main([]string{"--config", configPath, "eval", "run", "locomo", "--dataset", datasetPath, "--provider", "sqlite", "--manifest-dir", filepath.Join(dir, "runs"), "--run-id", "cli-test", "--json"}, strings.NewReader(""), &stdout, &stderr)
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %s", exit, stderr.String())
+	}
+	var result paxeval.LoCoMoResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, stdout.String())
+	}
+	if result.Benchmark != "locomo-text-qa-retrieval" || result.Passed != 1 || result.RecallAtK != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestEvalCleanupRemovesStaleSQLiteRun(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	runsDir := filepath.Join(dir, "runs")
+	scope, err := paxeval.PrepareProviderScope(cfg, "sqlite", paxeval.ScopeOptions{RunID: "stale-run", ManifestDir: runsDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(scope.Config.Providers["sqlite"].Path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scope.Config.Providers["sqlite"].Path, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.SetStatus(paxeval.EvalStatusComplete, nil); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	exit := Main([]string{"--config", configPath, "eval", "cleanup", "--stale", "--manifest-dir", runsDir}, nil, &stdout, &stderr)
+	if exit != 0 {
+		t.Fatalf("exit = %d, stderr = %s", exit, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(runsDir, "stale-run")); !os.IsNotExist(err) {
+		t.Fatalf("stale run still exists: %v", err)
+	}
+}
+
 func TestCLISetupRememberRecallAndHookEvent(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	codexConfigPath := filepath.Join(t.TempDir(), "codex.toml")

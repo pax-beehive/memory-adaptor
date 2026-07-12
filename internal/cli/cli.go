@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pax-beehive/memory-adaptor/internal/adapters"
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
 	"github.com/pax-beehive/memory-adaptor/internal/capturequeue"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
@@ -647,8 +648,14 @@ func writeRecallJSON(w io.Writer, result facade.RecallResult, mode string) error
 }
 
 func (r runner) runEval(args []string) error {
+	if len(args) > 0 && args[0] == "cleanup" {
+		return r.runEvalCleanup(args[1:])
+	}
 	if len(args) == 0 || args[0] != "run" {
-		return errors.New("usage: paxm eval run --suite PATH [--gate none|adapter|quality] [--json] [--compare RESULT.json] [--budget BUDGET.json] [--output RESULT.json]")
+		return errors.New("usage: paxm eval run [locomo] [options]")
+	}
+	if len(args) > 1 && args[1] == "locomo" {
+		return r.runLoCoMoEval(args[2:])
 	}
 	fs := flag.NewFlagSet("eval run", flag.ContinueOnError)
 	fs.SetOutput(r.stderr)
@@ -752,6 +759,140 @@ func (r runner) runEval(args []string) error {
 		return fmt.Errorf("eval regression budget failed: %d metrics outside budget", len(budgetFailures))
 	}
 	return nil
+}
+
+func (r runner) runEvalCleanup(args []string) error {
+	fs := flag.NewFlagSet("eval cleanup", flag.ContinueOnError)
+	fs.SetOutput(r.stderr)
+	runID := fs.String("run", "", "run id or run id prefix to clean")
+	stale := fs.Bool("stale", false, "clean all non-cleaned manifests not marked keep-memory")
+	manifestDir := fs.String("manifest-dir", filepath.Join(filepath.Dir(config.DefaultDataPath()), "eval-runs"), "eval run manifest directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*runID) == "" && !*stale {
+		return errors.New("eval cleanup requires --run ID or --stale")
+	}
+	entries, err := os.ReadDir(*manifestDir)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(paxruntime.ConfigFile(r.configPath))
+	if err != nil {
+		return err
+	}
+	registry := adapters.DefaultRegistry()
+	cleaned := 0
+	var cleanupErr error
+	for _, entry := range entries {
+		if !entry.IsDir() || (*runID != "" && entry.Name() != *runID && !strings.HasPrefix(entry.Name(), *runID+"-")) {
+			continue
+		}
+		manifestPath := filepath.Join(*manifestDir, entry.Name(), "manifest.json")
+		scope, restoreErr := paxeval.RestoreProviderScope(cfg, manifestPath)
+		if restoreErr != nil {
+			cleanupErr = errors.Join(cleanupErr, restoreErr)
+			continue
+		}
+		if *stale && *runID == "" && scope.Manifest.Status == paxeval.EvalStatusCleaned {
+			continue
+		}
+		if *stale && *runID == "" && scope.Manifest.KeepMemory {
+			continue
+		}
+		if *runID != "" {
+			scope.Manifest.KeepMemory = false
+		}
+		provider, buildErr := registry.BuildProvider(scope.Manifest.Provider, scope.Config.Providers[scope.Manifest.Provider])
+		if buildErr != nil {
+			cleanupErr = errors.Join(cleanupErr, buildErr)
+			continue
+		}
+		if err := paxeval.CleanupProviderScope(context.Background(), scope, provider); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup %s: %w", entry.Name(), err))
+			continue
+		}
+		cleaned++
+		fmt.Fprintf(r.stdout, "cleaned eval run: %s\n", entry.Name())
+	}
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	if cleaned == 0 {
+		return errors.New("no matching eval runs required cleanup")
+	}
+	return nil
+}
+
+func (r runner) runLoCoMoEval(args []string) error {
+	fs := flag.NewFlagSet("eval run locomo", flag.ContinueOnError)
+	fs.SetOutput(r.stderr)
+	datasetPath := fs.String("dataset", "", "path to the official locomo10.json dataset")
+	providerName := fs.String("provider", "sqlite", "configured provider name")
+	manifestDir := fs.String("manifest-dir", filepath.Join(filepath.Dir(config.DefaultDataPath()), "eval-runs"), "eval run manifest directory")
+	runID := fs.String("run-id", "", "stable eval run id")
+	limit := fs.Int("limit", 10, "retrieval result limit")
+	settle := fs.Duration("settle", 0, "wait after ingest before recall")
+	keepMemory := fs.Bool("keep-memory", false, "intentionally retain benchmark memories")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	outputPath := fs.String("output", "", "write result JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*datasetPath) == "" {
+		return errors.New("LoCoMo evaluation requires --dataset PATH")
+	}
+	if *limit <= 0 {
+		return errors.New("LoCoMo --limit must be positive")
+	}
+	cfg, err := config.Load(paxruntime.ConfigFile(r.configPath))
+	if err != nil {
+		return err
+	}
+	dataset, err := paxeval.LoadLoCoMo(*datasetPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*runID) == "" {
+		*runID = newHookEventID()
+	}
+	registry := adapters.DefaultRegistry()
+	result, runErr := (paxeval.LoCoMoRunner{BuildProvider: registry.BuildProvider}).Run(context.Background(), dataset, paxeval.LoCoMoRunOptions{
+		Config: cfg, Provider: *providerName, RunID: *runID, ManifestDir: *manifestDir,
+		Limit: *limit, KeepMemory: *keepMemory, Settle: *settle,
+	})
+	if *outputPath != "" {
+		data, marshalErr := json.MarshalIndent(result, "", "  ")
+		if marshalErr != nil {
+			return errors.Join(runErr, marshalErr)
+		}
+		if writeErr := os.WriteFile(*outputPath, append(data, '\n'), 0o600); writeErr != nil {
+			return errors.Join(runErr, writeErr)
+		}
+	}
+	if *jsonOut {
+		if err := writeJSON(r.stdout, result); err != nil {
+			return errors.Join(runErr, err)
+		}
+	} else {
+		writeLoCoMoReport(r.stdout, result)
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if result.ExecutionFailed > 0 {
+		return fmt.Errorf("LoCoMo eval execution failed for %d questions", result.ExecutionFailed)
+	}
+	return nil
+}
+
+func writeLoCoMoReport(w io.Writer, result paxeval.LoCoMoResult) {
+	fmt.Fprintf(w, "paxm eval: %s (%s)\n", result.Benchmark, result.Provider)
+	fmt.Fprintf(w, "  conversations: %d  questions: %d  passed: %d  failed: %d\n", result.ConversationCount, result.QuestionCount, result.Passed, result.Failed)
+	fmt.Fprintf(w, "  recall@k: %.3f  precision@k: %.3f  mrr: %.3f  duration: %dms\n", result.RecallAtK, result.PrecisionAtK, result.MRR, result.DurationMS)
+	for _, category := range result.Categories {
+		fmt.Fprintf(w, "  category %d: %d/%d  recall@k %.3f  precision@k %.3f  mrr %.3f\n", category.Category, category.Passed, category.Questions, category.RecallAtK, category.PrecisionAtK, category.MRR)
+	}
 }
 
 func writeEvalComparison(w io.Writer, comparison paxeval.Comparison) {
@@ -1941,6 +2082,8 @@ func (r runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill status --agent AGENT --provider NAME")
 	fmt.Fprintln(r.stdout, "  paxm eval run [--suite PATH] [--json]")
+	fmt.Fprintln(r.stdout, "  paxm eval run locomo --dataset PATH --provider NAME [--json]")
+	fmt.Fprintln(r.stdout, "  paxm eval cleanup (--run RUN_ID | --stale)")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] mcp serve")
 	fmt.Fprintln(r.stdout, "  paxm update [--check] [--version VERSION]")
 	fmt.Fprintln(r.stdout, "  paxm [--config PATH] config doctor")
