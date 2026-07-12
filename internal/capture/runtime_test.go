@@ -53,7 +53,7 @@ func TestCleanupWorkerSchedulesWithoutBlockingAndDrainsOnClose(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan struct{})
-	worker := newCleanupWorker(func(context.Context) { close(started); <-release; close(finished) })
+	worker := newCleanupWorker(func(context.Context) error { close(started); <-release; close(finished); return nil }, nil)
 	scheduled := make(chan struct{})
 	go func() { worker.Schedule(); close(scheduled) }()
 	select {
