@@ -81,9 +81,12 @@ Params contain `text`, optional `limit`, `metadata`, and `tiers`. The result is:
 {"hits":[{"id":"memory-123","text":"...","relevance":0.92,"score":0.92,"metadata":{}}]}
 ```
 
-`id` and `text` must faithfully identify stored content. Normalized scores
+`id` and `text` must faithfully identify stored content. Adapter-native scores
 should be in `[0,1]`; backend-native values may use `raw_score` and
-`raw_score_kind`. Metadata filters must not be silently discarded.
+`raw_score_kind`. Paxm preserves `relevance` and `score` semantics, then derives
+the same internal query-local ranking signal used for built-in providers before
+cross-provider ordering. Calibration does not change the JSON-RPC contract.
+Metadata filters must not be silently discarded.
 
 ## Capability discovery and optional methods
 

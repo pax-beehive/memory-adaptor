@@ -242,22 +242,29 @@ func appendSearchResponse(result *SearchResult, response searchResponse, policy 
 	if response.binding.MinScore != 0 {
 		minScore = response.binding.MinScore
 	}
+	eligible := make([]MemoryHit, 0, len(response.hits))
+	now := time.Now().UTC()
 	for _, hit := range response.hits {
 		hit.Provider = name
 		hit.Tier = EffectiveHitTier(hit)
 		hit.ExpiresAt = EffectiveHitExpiresAt(hit)
-		if !hitMatchesPolicy(hit, policy, time.Now().UTC()) {
+		hit.Relevance = normalizedRelevance(hit)
+		if !hitMatchesPolicy(hit, policy, now) {
 			continue
 		}
-		relevance := normalizedRelevance(hit)
-		if relevance < minRelevance {
+		if hit.Relevance < minRelevance {
 			continue
 		}
-		hit.Relevance = relevance
-		hit.Score = relevance*weight + recencyScore(hit.CreatedAt, policy.RecencyBoost)
+		recency := recencyScore(hit.CreatedAt, policy.RecencyBoost)
+		hit.Score = applyWeightAndRecency(hit.Relevance, weight, recency)
 		if hit.Score < minScore {
 			continue
 		}
+		eligible = append(eligible, hit)
+	}
+	for _, hit := range calibrateProviderHits(eligible) {
+		recency := recencyScore(hit.CreatedAt, policy.RecencyBoost)
+		hit.rankingScore = applyWeightAndRecency(hit.rankingScore, weight, recency)
 		result.Hits = append(result.Hits, hit)
 	}
 	return nil
@@ -280,8 +287,14 @@ func dedupeSearchHits(hits []MemoryHit) []MemoryHit {
 }
 
 func betterSearchHit(candidate, current MemoryHit) bool {
+	if candidate.rankingScore != current.rankingScore {
+		return candidate.rankingScore > current.rankingScore
+	}
 	if candidate.Score != current.Score {
 		return candidate.Score > current.Score
+	}
+	if candidate.Relevance != current.Relevance {
+		return candidate.Relevance > current.Relevance
 	}
 	if !candidate.CreatedAt.Equal(current.CreatedAt) {
 		return candidate.CreatedAt.After(current.CreatedAt)
@@ -294,10 +307,19 @@ func betterSearchHit(candidate, current MemoryHit) bool {
 
 func sortSearchHits(hits []MemoryHit) {
 	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].Score == hits[j].Score {
+		if hits[i].rankingScore != hits[j].rankingScore {
+			return hits[i].rankingScore > hits[j].rankingScore
+		}
+		if hits[i].Score != hits[j].Score {
+			return hits[i].Score > hits[j].Score
+		}
+		if !hits[i].CreatedAt.Equal(hits[j].CreatedAt) {
 			return hits[i].CreatedAt.After(hits[j].CreatedAt)
 		}
-		return hits[i].Score > hits[j].Score
+		if hits[i].Provider != hits[j].Provider {
+			return hits[i].Provider < hits[j].Provider
+		}
+		return hits[i].ID < hits[j].ID
 	})
 }
 

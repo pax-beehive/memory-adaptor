@@ -105,6 +105,7 @@ type MemoryHit struct {
 	CreatedAt    time.Time         `json:"created_at,omitempty"`
 	Tier         MemoryTier        `json:"tier,omitempty"`
 	ExpiresAt    *time.Time        `json:"expires_at,omitempty"`
+	rankingScore float64
 }
 
 type ProviderRoute struct {

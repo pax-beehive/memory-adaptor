@@ -426,8 +426,9 @@ Provider route fields:
 
 Threshold fields:
 
-- `min_relevance`: provider-normalized relevance threshold before merge.
-- `min_score`: final score threshold after weight and ranking boosts.
+- `min_relevance`: adapter-normalized relevance threshold before merge.
+- `min_score`: provider-normalized score threshold after route weight and
+  recency. Its existing meaning is unchanged by cross-provider calibration.
 
 Recall timeout fields:
 
@@ -469,8 +470,21 @@ recall_profiles:
 
 Ranking fields:
 
-- `type`: currently `weighted_relevance`.
-- `recency_boost`: optional boost added from item age when `created_at` exists.
+- `type`: currently `weighted_relevance`. Before applying route weights, paxm
+  derives an internal provider-independent ranking signal as adapter-normalized
+  relevance divided by the square of provider-local rank. This limits flat-score providers
+  without promoting weak evidence. It is deterministic normalization, not
+  probability calibration.
+- `recency_boost`: optional bounded recency signal added after calibrated
+  relevance is multiplied by the route weight. The final score can exceed `1`
+  when a route weight exceeds `1`, preserving existing multiplier semantics.
+
+Recall JSON exposes three score layers: `raw_score` is the untouched backend
+value, `relevance` is the adapter-normalized `[0,1]` value, and `score` applies
+route weight and recency to that value. Cross-provider calibration remains an
+internal router concern so public provider, facade, CLI, MCP, and JSON-RPC
+interfaces do not gain calibration complexity. The same algorithm covers
+SQLite, Zep, Mem0, Mem0 Cloud, and JSON-RPC without vendor-specific multipliers.
 
 ## Write Profiles
 
