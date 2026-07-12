@@ -1,0 +1,7 @@
+{
+  "min_pass_rate": 1.0,
+  "min_recall_at_k": 1.0,
+  "min_precision_at_k": 1.0,
+  "min_mrr": 1.0,
+  "max_false_positive_rate": 0.0
+}

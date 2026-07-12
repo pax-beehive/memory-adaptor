@@ -1,0 +1,912 @@
+{
+  "version": 1,
+  "name": "sqlite-retrieval-challenge-32",
+  "cases": [
+    {
+      "id": "morphology-01",
+      "category": "morphology",
+      "memories": [
+        {
+          "id": "morphology-01-target",
+          "text": "Confirmed project decision about deployment application.",
+          "tier": "ltm"
+        },
+        {
+          "id": "morphology-01-forbidden",
+          "text": "Unrelated temporary note about application.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "deploy application",
+        "limit": 1
+      },
+      "expected": [
+        "morphology-01-target"
+      ],
+      "forbidden": [
+        "morphology-01-forbidden"
+      ],
+      "expected_first": "morphology-01-target"
+    },
+    {
+      "id": "morphology-02",
+      "category": "morphology",
+      "memories": [
+        {
+          "id": "morphology-02-target",
+          "text": "Confirmed project decision about configuration provider.",
+          "tier": "ltm"
+        },
+        {
+          "id": "morphology-02-forbidden",
+          "text": "Unrelated temporary note about provider.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "configure provider",
+        "limit": 1
+      },
+      "expected": [
+        "morphology-02-target"
+      ],
+      "forbidden": [
+        "morphology-02-forbidden"
+      ],
+      "expected_first": "morphology-02-target"
+    },
+    {
+      "id": "morphology-03",
+      "category": "morphology",
+      "memories": [
+        {
+          "id": "morphology-03-target",
+          "text": "Confirmed project decision about authentication gateway.",
+          "tier": "ltm"
+        },
+        {
+          "id": "morphology-03-forbidden",
+          "text": "Unrelated temporary note about gateway.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "authenticate gateway",
+        "limit": 1
+      },
+      "expected": [
+        "morphology-03-target"
+      ],
+      "forbidden": [
+        "morphology-03-forbidden"
+      ],
+      "expected_first": "morphology-03-target"
+    },
+    {
+      "id": "morphology-04",
+      "category": "morphology",
+      "memories": [
+        {
+          "id": "morphology-04-target",
+          "text": "Confirmed project decision about retries delivery.",
+          "tier": "ltm"
+        },
+        {
+          "id": "morphology-04-forbidden",
+          "text": "Unrelated temporary note about delivery.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "retry delivery",
+        "limit": 1
+      },
+      "expected": [
+        "morphology-04-target"
+      ],
+      "forbidden": [
+        "morphology-04-forbidden"
+      ],
+      "expected_first": "morphology-04-target"
+    },
+    {
+      "id": "bounded_alias-01",
+      "category": "bounded_alias",
+      "memories": [
+        {
+          "id": "bounded_alias-01-target",
+          "text": "Confirmed project decision about repository migration.",
+          "tier": "ltm"
+        },
+        {
+          "id": "bounded_alias-01-forbidden",
+          "text": "Unrelated temporary note about migration.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "repo migration",
+        "limit": 1
+      },
+      "expected": [
+        "bounded_alias-01-target"
+      ],
+      "forbidden": [
+        "bounded_alias-01-forbidden"
+      ],
+      "expected_first": "bounded_alias-01-target"
+    },
+    {
+      "id": "bounded_alias-02",
+      "category": "bounded_alias",
+      "memories": [
+        {
+          "id": "bounded_alias-02-target",
+          "text": "Confirmed project decision about configuration file.",
+          "tier": "ltm"
+        },
+        {
+          "id": "bounded_alias-02-forbidden",
+          "text": "Unrelated temporary note about file.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "config file",
+        "limit": 1
+      },
+      "expected": [
+        "bounded_alias-02-target"
+      ],
+      "forbidden": [
+        "bounded_alias-02-forbidden"
+      ],
+      "expected_first": "bounded_alias-02-target"
+    },
+    {
+      "id": "cjk_substring-01",
+      "category": "cjk_substring",
+      "memories": [
+        {
+          "id": "cjk_substring-01-target",
+          "text": "生产环境部署区域是美国西部一区",
+          "tier": "ltm"
+        },
+        {
+          "id": "cjk_substring-01-forbidden",
+          "text": "旧讨论只提到部署，没有区域结论",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "部署区域",
+        "limit": 1
+      },
+      "expected": [
+        "cjk_substring-01-target"
+      ],
+      "forbidden": [
+        "cjk_substring-01-forbidden"
+      ],
+      "expected_first": "cjk_substring-01-target"
+    },
+    {
+      "id": "cjk_substring-02",
+      "category": "cjk_substring",
+      "memories": [
+        {
+          "id": "cjk_substring-02-target",
+          "text": "数据库迁移必须先执行结构变更",
+          "tier": "ltm"
+        },
+        {
+          "id": "cjk_substring-02-forbidden",
+          "text": "数据库备份说明与迁移无关",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "数据库迁移",
+        "limit": 1
+      },
+      "expected": [
+        "cjk_substring-02-target"
+      ],
+      "forbidden": [
+        "cjk_substring-02-forbidden"
+      ],
+      "expected_first": "cjk_substring-02-target"
+    },
+    {
+      "id": "cjk_substring-03",
+      "category": "cjk_substring",
+      "memories": [
+        {
+          "id": "cjk_substring-03-target",
+          "text": "默认记忆提供方使用本地存储",
+          "tier": "ltm"
+        },
+        {
+          "id": "cjk_substring-03-forbidden",
+          "text": "记忆清理任务没有提供方信息",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "记忆提供方",
+        "limit": 1
+      },
+      "expected": [
+        "cjk_substring-03-target"
+      ],
+      "forbidden": [
+        "cjk_substring-03-forbidden"
+      ],
+      "expected_first": "cjk_substring-03-target"
+    },
+    {
+      "id": "cjk_substring-04",
+      "category": "cjk_substring",
+      "memories": [
+        {
+          "id": "cjk_substring-04-target",
+          "text": "发布流程需要先验证校验和",
+          "tier": "ltm"
+        },
+        {
+          "id": "cjk_substring-04-forbidden",
+          "text": "历史发布事故未记录流程",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "发布流程",
+        "limit": 1
+      },
+      "expected": [
+        "cjk_substring-04-target"
+      ],
+      "forbidden": [
+        "cjk_substring-04-forbidden"
+      ],
+      "expected_first": "cjk_substring-04-target"
+    },
+    {
+      "id": "cjk_substring-05",
+      "category": "cjk_substring",
+      "memories": [
+        {
+          "id": "cjk_substring-05-target",
+          "text": "被动召回不能阻塞智能体",
+          "tier": "ltm"
+        },
+        {
+          "id": "cjk_substring-05-forbidden",
+          "text": "主动召回性能记录不是被动路径",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "被动召回",
+        "limit": 1
+      },
+      "expected": [
+        "cjk_substring-05-target"
+      ],
+      "forbidden": [
+        "cjk_substring-05-forbidden"
+      ],
+      "expected_first": "cjk_substring-05-target"
+    },
+    {
+      "id": "cjk_substring-06",
+      "category": "cjk_substring",
+      "memories": [
+        {
+          "id": "cjk_substring-06-target",
+          "text": "工作区过滤必须阻止跨项目结果",
+          "tier": "ltm"
+        },
+        {
+          "id": "cjk_substring-06-forbidden",
+          "text": "工作区索引说明没有过滤规则",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "工作区过滤",
+        "limit": 1
+      },
+      "expected": [
+        "cjk_substring-06-target"
+      ],
+      "forbidden": [
+        "cjk_substring-06-forbidden"
+      ],
+      "expected_first": "cjk_substring-06-target"
+    },
+    {
+      "id": "identifier_split-01",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-01-target",
+          "text": "providerSearchTimeout is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-01-forbidden",
+          "text": "providerSearchRetries is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "provider search timeout",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-01-target"
+      ],
+      "forbidden": [
+        "identifier_split-01-forbidden"
+      ],
+      "expected_first": "identifier_split-01-target"
+    },
+    {
+      "id": "identifier_split-02",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-02-target",
+          "text": "capture_queue_retry_min is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-02-forbidden",
+          "text": "capture_queue_retry_max is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "capture queue retry min",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-02-target"
+      ],
+      "forbidden": [
+        "identifier_split-02-forbidden"
+      ],
+      "expected_first": "identifier_split-02-target"
+    },
+    {
+      "id": "identifier_split-03",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-03-target",
+          "text": "PAXM_INSTALL_DIR is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-03-forbidden",
+          "text": "PAXM_CONFIG_DIR is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "paxm install dir",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-03-target"
+      ],
+      "forbidden": [
+        "identifier_split-03-forbidden"
+      ],
+      "expected_first": "identifier_split-03-target"
+    },
+    {
+      "id": "identifier_split-04",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-04-target",
+          "text": "remember batch to provider is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-04-forbidden",
+          "text": "rememberBatchToArchive is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "rememberBatchToProvider",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-04-target"
+      ],
+      "forbidden": [
+        "identifier_split-04-forbidden"
+      ],
+      "expected_first": "identifier_split-04-target"
+    },
+    {
+      "id": "identifier_split-05",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-05-target",
+          "text": "passive write latency total is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-05-forbidden",
+          "text": "active write latency total is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "passiveWriteLatencyTotal",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-05-target"
+      ],
+      "forbidden": [
+        "identifier_split-05-forbidden"
+      ],
+      "expected_first": "identifier_split-05-target"
+    },
+    {
+      "id": "identifier_split-06",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-06-target",
+          "text": "internal/provider/sqlite/search.go is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-06-forbidden",
+          "text": "internal/provider/mem0/search.go is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "provider sqlite search",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-06-target"
+      ],
+      "forbidden": [
+        "identifier_split-06-forbidden"
+      ],
+      "expected_first": "identifier_split-06-target"
+    },
+    {
+      "id": "identifier_split-07",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-07-target",
+          "text": "release v0.9.14 checksum is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-07-forbidden",
+          "text": "release v0.9.13 checksum is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "v0.9.14 checksum",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-07-target"
+      ],
+      "forbidden": [
+        "identifier_split-07-forbidden"
+      ],
+      "expected_first": "identifier_split-07-target"
+    },
+    {
+      "id": "identifier_split-08",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-08-target",
+          "text": "error code PAXM_E_RECALL_TIMEOUT is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-08-forbidden",
+          "text": "error code PAXM_E_WRITE_TIMEOUT is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "paxm recall timeout",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-08-target"
+      ],
+      "forbidden": [
+        "identifier_split-08-forbidden"
+      ],
+      "expected_first": "identifier_split-08-target"
+    },
+    {
+      "id": "identifier_split-09",
+      "category": "identifier_split",
+      "memories": [
+        {
+          "id": "identifier_split-09-target",
+          "text": "workspaceFilterEnabled is the relevant identifier.",
+          "tier": "ltm"
+        },
+        {
+          "id": "identifier_split-09-forbidden",
+          "text": "workspaceFilterOptional is unrelated.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "workspace_filter_enabled",
+        "limit": 1
+      },
+      "expected": [
+        "identifier_split-09-target"
+      ],
+      "forbidden": [
+        "identifier_split-09-forbidden"
+      ],
+      "expected_first": "identifier_split-09-target"
+    },
+    {
+      "id": "strict_suppresses_relaxed-01",
+      "category": "strict_suppresses_relaxed",
+      "memories": [
+        {
+          "id": "strict_suppresses_relaxed-01-target",
+          "text": "Confirmed decision: provider timeout bulkhead.",
+          "tier": "ltm"
+        },
+        {
+          "id": "strict_suppresses_relaxed-01-forbidden-a",
+          "text": "Unrelated note mentioning provider.",
+          "tier": "ltm"
+        },
+        {
+          "id": "strict_suppresses_relaxed-01-forbidden-b",
+          "text": "Unrelated note mentioning bulkhead.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "provider timeout bulkhead",
+        "limit": 3
+      },
+      "expected": [
+        "strict_suppresses_relaxed-01-target"
+      ],
+      "forbidden": [
+        "strict_suppresses_relaxed-01-forbidden-a",
+        "strict_suppresses_relaxed-01-forbidden-b"
+      ]
+    },
+    {
+      "id": "strict_suppresses_relaxed-02",
+      "category": "strict_suppresses_relaxed",
+      "memories": [
+        {
+          "id": "strict_suppresses_relaxed-02-target",
+          "text": "Confirmed decision: release checksum verification.",
+          "tier": "ltm"
+        },
+        {
+          "id": "strict_suppresses_relaxed-02-forbidden-a",
+          "text": "Unrelated note mentioning release.",
+          "tier": "ltm"
+        },
+        {
+          "id": "strict_suppresses_relaxed-02-forbidden-b",
+          "text": "Unrelated note mentioning verification.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "release checksum verification",
+        "limit": 3
+      },
+      "expected": [
+        "strict_suppresses_relaxed-02-target"
+      ],
+      "forbidden": [
+        "strict_suppresses_relaxed-02-forbidden-a",
+        "strict_suppresses_relaxed-02-forbidden-b"
+      ]
+    },
+    {
+      "id": "strict_suppresses_relaxed-03",
+      "category": "strict_suppresses_relaxed",
+      "memories": [
+        {
+          "id": "strict_suppresses_relaxed-03-target",
+          "text": "Confirmed decision: sqlite recall ranking.",
+          "tier": "ltm"
+        },
+        {
+          "id": "strict_suppresses_relaxed-03-forbidden-a",
+          "text": "Unrelated note mentioning sqlite.",
+          "tier": "ltm"
+        },
+        {
+          "id": "strict_suppresses_relaxed-03-forbidden-b",
+          "text": "Unrelated note mentioning ranking.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "sqlite recall ranking",
+        "limit": 3
+      },
+      "expected": [
+        "strict_suppresses_relaxed-03-target"
+      ],
+      "forbidden": [
+        "strict_suppresses_relaxed-03-forbidden-a",
+        "strict_suppresses_relaxed-03-forbidden-b"
+      ]
+    },
+    {
+      "id": "relaxed_fallback-01",
+      "category": "relaxed_fallback",
+      "memories": [
+        {
+          "id": "relaxed_fallback-01-target",
+          "text": "Confirmed decision about provider timeout.",
+          "tier": "ltm"
+        },
+        {
+          "id": "relaxed_fallback-01-forbidden",
+          "text": "Unrelated note mentioning only provider.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "provider timeout bulkhead",
+        "limit": 1
+      },
+      "expected": [
+        "relaxed_fallback-01-target"
+      ],
+      "forbidden": [
+        "relaxed_fallback-01-forbidden"
+      ],
+      "expected_first": "relaxed_fallback-01-target"
+    },
+    {
+      "id": "relaxed_fallback-02",
+      "category": "relaxed_fallback",
+      "memories": [
+        {
+          "id": "relaxed_fallback-02-target",
+          "text": "Confirmed decision about release checksum.",
+          "tier": "ltm"
+        },
+        {
+          "id": "relaxed_fallback-02-forbidden",
+          "text": "Unrelated note mentioning only release.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "release checksum verification",
+        "limit": 1
+      },
+      "expected": [
+        "relaxed_fallback-02-target"
+      ],
+      "forbidden": [
+        "relaxed_fallback-02-forbidden"
+      ],
+      "expected_first": "relaxed_fallback-02-target"
+    },
+    {
+      "id": "relaxed_fallback-03",
+      "category": "relaxed_fallback",
+      "memories": [
+        {
+          "id": "relaxed_fallback-03-target",
+          "text": "Confirmed decision about capture episode.",
+          "tier": "ltm"
+        },
+        {
+          "id": "relaxed_fallback-03-forbidden",
+          "text": "Unrelated note mentioning only capture.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "capture episode ordering",
+        "limit": 1
+      },
+      "expected": [
+        "relaxed_fallback-03-target"
+      ],
+      "forbidden": [
+        "relaxed_fallback-03-forbidden"
+      ],
+      "expected_first": "relaxed_fallback-03-target"
+    },
+    {
+      "id": "long_noise-01",
+      "category": "long_noise",
+      "memories": [
+        {
+          "id": "long_noise-01-target",
+          "text": "Decision: deployment region us-west-1.",
+          "tier": "ltm"
+        },
+        {
+          "id": "long_noise-01-forbidden",
+          "text": "Historical transcript with deployment discussion, unrelated tool output, region experiments, and an obsolete us-west-1 note.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "deployment region us-west-1",
+        "limit": 3
+      },
+      "expected": [
+        "long_noise-01-target"
+      ],
+      "forbidden": [
+        "long_noise-01-forbidden"
+      ]
+    },
+    {
+      "id": "long_noise-02",
+      "category": "long_noise",
+      "memories": [
+        {
+          "id": "long_noise-02-target",
+          "text": "Decision: provider timeout 250ms.",
+          "tier": "ltm"
+        },
+        {
+          "id": "long_noise-02-forbidden",
+          "text": "Historical transcript with provider discussion, unrelated tool output, timeout experiments, and an obsolete 250ms note.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "provider timeout 250ms",
+        "limit": 3
+      },
+      "expected": [
+        "long_noise-02-target"
+      ],
+      "forbidden": [
+        "long_noise-02-forbidden"
+      ]
+    },
+    {
+      "id": "long_noise-03",
+      "category": "long_noise",
+      "memories": [
+        {
+          "id": "long_noise-03-target",
+          "text": "Decision: sqlite database location.",
+          "tier": "ltm"
+        },
+        {
+          "id": "long_noise-03-forbidden",
+          "text": "Historical transcript with sqlite discussion, unrelated tool output, database experiments, and an obsolete location note.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "sqlite database location",
+        "limit": 3
+      },
+      "expected": [
+        "long_noise-03-target"
+      ],
+      "forbidden": [
+        "long_noise-03-forbidden"
+      ]
+    },
+    {
+      "id": "long_noise-04",
+      "category": "long_noise",
+      "memories": [
+        {
+          "id": "long_noise-04-target",
+          "text": "Decision: release checksum required.",
+          "tier": "ltm"
+        },
+        {
+          "id": "long_noise-04-forbidden",
+          "text": "Historical transcript with release discussion, unrelated tool output, checksum experiments, and an obsolete required note.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "release checksum required",
+        "limit": 3
+      },
+      "expected": [
+        "long_noise-04-target"
+      ],
+      "forbidden": [
+        "long_noise-04-forbidden"
+      ]
+    },
+    {
+      "id": "long_noise-05",
+      "category": "long_noise",
+      "memories": [
+        {
+          "id": "long_noise-05-target",
+          "text": "Decision: capture retry ordering.",
+          "tier": "ltm"
+        },
+        {
+          "id": "long_noise-05-forbidden",
+          "text": "Historical transcript with capture discussion, unrelated tool output, retry experiments, and an obsolete ordering note.",
+          "tier": "ltm"
+        }
+      ],
+      "recall": {
+        "mode": "active",
+        "query": "capture retry ordering",
+        "limit": 3
+      },
+      "expected": [
+        "long_noise-05-target"
+      ],
+      "forbidden": [
+        "long_noise-05-forbidden"
+      ]
+    }
+  ]
+}

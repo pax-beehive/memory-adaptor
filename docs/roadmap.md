@@ -165,6 +165,15 @@ recall request forwarding, result mapping, routing, and failure/recovery policy.
 Recall@K, MRR, semantic ranking, and provider consolidation quality remain
 observable benchmark metrics and do not block paxm changes.
 
+`evals/sqlite-retrieval` now adds a deterministic challenge frontier plus a
+separate zero-leak workspace suite for improving the default SQLite provider
+through explicit, rg-like lexical search. It covers workspace isolation,
+conservative morphology and bounded aliases, CJK substrings, identifier
+splitting, strict-before-relaxed retrieval, and long-context distractors. The
+suites remain non-gating while the current implementation is characterized;
+their target budgets become enforceable only after the retrieval module reaches
+the thresholds without regressing the original 100-case baseline.
+
 An opt-in cross-agent tracer also exists under `evals/cross-agent`. It runs Pi
 producer sessions and fresh Claude Code control/passive/active consumers in
 audited OS sandboxes, with one SQLite database as the only shared channel. The
