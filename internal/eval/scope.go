@@ -77,6 +77,12 @@ func PrepareProviderScope(cfg config.Config, providerName string, opts ScopeOpti
 		provider.RunID = remoteScope
 		infer := false
 		provider.Infer = &infer
+	case "mem0-cloud":
+		provider.UserID = ""
+		provider.AgentID = ""
+		provider.RunID = remoteScope
+		infer := false
+		provider.Infer = &infer
 	case "zep":
 		provider.UserID = ""
 		provider.GraphID = remoteScope
@@ -136,6 +142,10 @@ func RestoreProviderScope(cfg config.Config, manifestPath string) (*ProviderScop
 	case "sqlite":
 		provider.Path = filepath.Join(filepath.Dir(manifestPath), "memory.sqlite")
 	case "mem0":
+		provider.RunID = manifest.RemoteScope
+	case "mem0-cloud":
+		provider.UserID = ""
+		provider.AgentID = ""
 		provider.RunID = manifest.RemoteScope
 	case "zep":
 		provider.UserID = ""

@@ -177,6 +177,7 @@ Read the detailed [architecture](docs/architecture.md) and
 | SQLite | Built in | Local-first default; no account or API key |
 | Zep | Built in | User or graph scoped |
 | Mem0 | Built in | Self-hosted REST API |
+| Mem0 Cloud | Built in | Managed Platform API with async v3 writes/search |
 | Custom JSON-RPC | Adapter | Bring an existing or private memory system |
 
 Multiple provider instances can be enabled at once. Recall and write profiles

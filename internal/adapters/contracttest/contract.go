@@ -51,6 +51,20 @@ func Run(t *testing.T, provider memory.Provider, expected Expectation) {
 	if expected.AssertSearch != nil {
 		expected.AssertSearch(t)
 	}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	routed, err := router.Search(ctx, expected.Query)
+	if err != nil {
+		t.Fatalf("routed search: %v", err)
+	}
+	if len(routed.Hits) != 1 || routed.Hits[0].ID != hits[0].ID {
+		t.Fatalf("routed hits = %#v, want adapter hit %q", routed.Hits, hits[0].ID)
+	}
+	if routed.Hits[0].Relevance != hits[0].Relevance || routed.Hits[0].Score != hits[0].Relevance {
+		t.Fatalf("router changed public score semantics: adapter=%#v routed=%#v", hits[0], routed.Hits[0])
+	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	for operation, err := range map[string]error{

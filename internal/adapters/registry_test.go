@@ -128,6 +128,30 @@ func TestDefaultRegistryBuildsMem0Provider(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistryBuildsMem0CloudProvider(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/memories/" || r.Header.Get("Authorization") != "Token test-key" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"count":0,"results":[]}`))
+	}))
+	defer server.Close()
+	cfg := config.Config{
+		Version:        1,
+		Providers:      map[string]config.ProviderConfig{"cloud": {Type: "mem0-cloud", Enabled: true, BaseURL: server.URL, APIKey: "test-key", UserID: "user"}},
+		RecallProfiles: map[string]config.RecallProfileConfig{"default": {Providers: []config.ProviderRouteConfig{{Name: "cloud"}}}},
+	}
+	router, err := DefaultRegistry().BuildRouter(config.Normalize(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := router.Health(context.Background())
+	if err != nil || len(statuses) != 1 || statuses[0].Provider != "cloud" {
+		t.Fatalf("statuses = %#v, err = %v", statuses, err)
+	}
+}
+
 func TestRegistryAllowsMultipleInstancesOfOneProviderType(t *testing.T) {
 	t.Parallel()
 

@@ -34,6 +34,14 @@ providers:
     api_key: "plain-text-mem0-api-key"
     user_id: todd
 
+  mem0_cloud:
+    type: mem0-cloud
+    enabled: false
+    base_url: https://api.mem0.ai
+    api_key: "plain-text-mem0-cloud-api-key"
+    user_id: todd
+    infer: false
+
   jsonrpc:
     type: jsonrpc
     enabled: false
@@ -133,7 +141,7 @@ agents:
           profile: passive
           query_template: "{{ .prompt }}"
           max_results: 2
-          timeout: 800ms
+          timeout_extra: 100ms
           output: markdown
           insertion:
             min_score: 0.8
@@ -327,7 +335,7 @@ providers:
 
 Fields:
 
-- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, or `jsonrpc`.
+- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, `mem0-cloud`, or `jsonrpc`.
 - `enabled`: whether this provider can be used by profiles.
 - `path`: local SQLite provider database path.
 - `api_key`: optional plain-text API key for remote providers.
@@ -347,7 +355,7 @@ Fields:
 - `source_description`: optional Zep source description for writes.
 - `infer`: optional Mem0 write flag. Omit it to use the server default.
 
-V1 ships with `sqlite`, `zep`, `mem0`, and `jsonrpc` provider adapters. Zep
+V1 ships with `sqlite`, `zep`, `mem0`, `mem0-cloud`, and `jsonrpc` provider adapters. Zep
 requires `api_key` and exactly one of `user_id` or `graph_id`. If setup is
 configured for a Zep user graph, it idempotently creates the configured
 `user_id` when the user does not already exist.
@@ -357,6 +365,17 @@ without a `/v1` prefix, for example `http://localhost:8888`, and set at least
 one scope for paxm to use with `user_id`, `agent_id`, or `run_id`. Programmatic
 auth uses `api_key` as an `X-API-Key` header; leave it blank only for local Mem0
 deployments that intentionally run with auth disabled.
+
+Mem0 Cloud uses the separate `mem0-cloud` type. It defaults to
+`https://api.mem0.ai`, requires `api_key`, authenticates with `Authorization:
+Token`, and encapsulates the platform's asynchronous v3 add and search APIs.
+It uses the same scope and `infer` fields as the self-hosted adapter, but defaults
+`infer` to `false` so agent episodes are stored verbatim with predictable write
+latency and lexical recall. Explicit `infer: true` enables platform extraction
+and may require a write-route timeout above the default `30s`. After a successful
+asynchronous event, paxm retries the metadata lookup briefly to tolerate delayed
+read visibility. Eval runs force `infer: false` and add an isolated `run_id` so
+their writes can be removed.
 
 JSON-RPC providers are custom plugin commands. Paxm invokes the command over
 stdio with one JSON-RPC 2.0 request per provider operation. The command should
@@ -407,15 +426,19 @@ Provider route fields:
 
 Threshold fields:
 
-- `min_relevance`: provider-normalized relevance threshold before merge.
-- `min_score`: final score threshold after weight and ranking boosts.
+- `min_relevance`: adapter-normalized relevance threshold before merge.
+- `min_score`: provider-normalized score threshold after route weight and
+  recency. Its existing meaning is unchanged by cross-provider calibration.
 
 Recall timeout fields:
 
 - A provider route `timeout` limits that downstream independently. Passive
   profiles default to `250ms`, so one slow provider cannot delay healthy hits.
-- A hook recall `timeout` limits the complete passive recall operation. It
-  defaults to `800ms` and returns any partial hits collected before the budget.
+- A hook recall `timeout_extra` derives the complete passive recall deadline as
+  the largest selected provider-route timeout plus this scheduling margin. New
+  configurations default the margin to `100ms`, so every provider gets its own
+  configured budget while the hook remains bounded. The legacy absolute
+  `timeout` remains supported when `timeout_extra` is omitted.
 
 Write provider routes use the same `timeout` field. Write profiles default to
 `30s`; a timed-out optional provider is reported without delaying healthy
@@ -433,13 +456,13 @@ recall_profiles:
         required: true
         weight: 1
         timeout: 250ms
-      - name: mem0_team
+      - name: mem0_cloud
         required: false
         weight: 1
-        timeout: 250ms
+        timeout: 800ms
         thresholds:
-          min_relevance: 0.45
-          min_score: 0.45
+          min_relevance: 0.20
+          min_score: 0.20
     thresholds:
       min_relevance: 0.75
       min_score: 0.75
@@ -447,8 +470,21 @@ recall_profiles:
 
 Ranking fields:
 
-- `type`: currently `weighted_relevance`.
-- `recency_boost`: optional boost added from item age when `created_at` exists.
+- `type`: currently `weighted_relevance`. Before applying route weights, paxm
+  derives an internal provider-independent ranking signal as adapter-normalized
+  relevance divided by the square of provider-local rank. This limits flat-score providers
+  without promoting weak evidence. It is deterministic normalization, not
+  probability calibration.
+- `recency_boost`: optional bounded recency signal added after calibrated
+  relevance is multiplied by the route weight. The final score can exceed `1`
+  when a route weight exceeds `1`, preserving existing multiplier semantics.
+
+Recall JSON exposes three score layers: `raw_score` is the untouched backend
+value, `relevance` is the adapter-normalized `[0,1]` value, and `score` applies
+route weight and recency to that value. Cross-provider calibration remains an
+internal router concern so public provider, facade, CLI, MCP, and JSON-RPC
+interfaces do not gain calibration complexity. The same algorithm covers
+SQLite, Zep, Mem0, Mem0 Cloud, and JSON-RPC without vendor-specific multipliers.
 
 ## Write Profiles
 

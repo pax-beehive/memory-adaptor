@@ -103,7 +103,7 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 		t.Fatalf("initial passive recall should read LTM only: %#v", initialProfile)
 	}
 	hook := cfg.Agents["codex"].Hooks["user_input"].Recall
-	if hook.Profile != "passive" || hook.MaxResults != 2 || hook.Timeout != "800ms" {
+	if hook.Profile != "passive" || hook.MaxResults != 2 || hook.Timeout != "" || hook.TimeoutExtra != "100ms" {
 		t.Fatalf("user_input hook should use passive profile: %#v", hook)
 	}
 	if hook.Insertion.MinScore != 0.8 || hook.Insertion.MaxItems != 2 || !hook.Insertion.RequireQueryTerms {
@@ -168,6 +168,43 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	}
 	if ltm := cfg.WriteProfiles["ltm"]; ltm.Tier != "ltm" || ltm.ExpiresAfter != "" {
 		t.Fatalf("ltm write profile should be long-term: %#v", ltm)
+	}
+}
+
+func TestDefaultProviderRecallTimeoutUsesCloudBudget(t *testing.T) {
+	if got := DefaultProviderRecallTimeout("mem0-cloud"); got != "800ms" {
+		t.Fatalf("cloud timeout = %q", got)
+	}
+	if got := DefaultProviderRecallTimeout("sqlite"); got != "250ms" {
+		t.Fatalf("sqlite timeout = %q", got)
+	}
+}
+
+func TestNormalizeMigratesLegacyPassiveTimeoutDefaults(t *testing.T) {
+	cfg := Config{
+		Version:   1,
+		Providers: map[string]ProviderConfig{"cloud": {Type: "mem0-cloud", Enabled: true}},
+		RecallProfiles: map[string]RecallProfileConfig{
+			"passive": {Providers: []ProviderRouteConfig{{Name: "cloud", Timeout: "250ms"}}},
+		},
+		Agents: map[string]AgentConfig{"opencode": {Enabled: true, Hooks: map[string]AgentHookConfig{
+			"user_input": {Recall: HookRecallConfig{Enabled: true, Profile: "passive", Timeout: "800ms"}},
+		}}},
+	}
+	normalized := Normalize(cfg)
+	route := normalized.RecallProfiles["passive"].Providers[0]
+	if got := route.Timeout; got != "800ms" {
+		t.Fatalf("cloud route timeout = %q", got)
+	}
+	if route.Thresholds == nil || route.Thresholds.MinRelevance != 0.20 || route.Thresholds.MinScore != 0.20 {
+		t.Fatalf("cloud route thresholds = %#v", route.Thresholds)
+	}
+	if infer := normalized.Providers["cloud"].Infer; infer == nil || *infer {
+		t.Fatalf("cloud infer = %#v, want false", infer)
+	}
+	recall := normalized.Agents["opencode"].Hooks["user_input"].Recall
+	if recall.Timeout != "" || recall.TimeoutExtra != "100ms" {
+		t.Fatalf("normalized recall = %#v", recall)
 	}
 }
 

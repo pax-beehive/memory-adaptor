@@ -18,6 +18,7 @@ var ErrConfigMissing = errors.New("paxm config is missing")
 const (
 	defaultConfigVersion       = 1
 	defaultMem0BaseURL         = "http://localhost:8888"
+	defaultMem0CloudBaseURL    = "https://api.mem0.ai"
 	defaultJSONRPCTransport    = "stdio"
 	defaultJSONRPCTimeout      = "30s"
 	defaultProviderRouteWeight = 1
@@ -36,7 +37,10 @@ const (
 
 	defaultHookRecallMaxResults      = passiveRecallMaxResults
 	defaultPassiveRecallTimeout      = "800ms"
+	defaultPassiveRecallTimeoutExtra = "100ms"
 	defaultProviderRecallTimeout     = "250ms"
+	defaultCloudRecallTimeout        = "800ms"
+	defaultCloudRecallThreshold      = 0.20
 	defaultProviderWriteTimeout      = "30s"
 	defaultHookInsertionMinScore     = 0.8
 	defaultHookInsertionMaxItems     = passiveRecallMaxResults
@@ -168,6 +172,7 @@ type HookRecallConfig struct {
 	QueryTemplate string              `json:"query_template,omitempty" yaml:"query_template,omitempty"`
 	MaxResults    int                 `json:"max_results,omitempty" yaml:"max_results,omitempty"`
 	Timeout       string              `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	TimeoutExtra  string              `json:"timeout_extra,omitempty" yaml:"timeout_extra,omitempty"`
 	Output        string              `json:"output,omitempty" yaml:"output,omitempty"`
 	Insertion     HookInsertionConfig `json:"insertion,omitempty" yaml:"insertion,omitempty"`
 	Initial       *HookInitialRecall  `json:"initial,omitempty" yaml:"initial,omitempty"`
@@ -179,6 +184,7 @@ type HookInitialRecall struct {
 	QueryTemplate string              `json:"query_template,omitempty" yaml:"query_template,omitempty"`
 	MaxResults    int                 `json:"max_results,omitempty" yaml:"max_results,omitempty"`
 	Timeout       string              `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	TimeoutExtra  string              `json:"timeout_extra,omitempty" yaml:"timeout_extra,omitempty"`
 	Insertion     HookInsertionConfig `json:"insertion,omitempty" yaml:"insertion,omitempty"`
 }
 
@@ -286,6 +292,7 @@ func DefaultConfig(configPath string) Config {
 	defaultWriteRoutes := []ProviderRouteConfig{
 		{Name: "sqlite", Required: true, Timeout: defaultProviderWriteTimeout},
 	}
+	inferFalse := false
 	return Config{
 		Version: defaultConfigVersion,
 		Providers: map[string]ProviderConfig{
@@ -303,6 +310,12 @@ func DefaultConfig(configPath string) Config {
 				Type:    "mem0",
 				Enabled: false,
 				BaseURL: defaultMem0BaseURL,
+			},
+			"mem0_cloud": {
+				Type:    "mem0-cloud",
+				Enabled: false,
+				BaseURL: defaultMem0CloudBaseURL,
+				Infer:   &inferFalse,
 			},
 			"jsonrpc": {
 				Type:      "jsonrpc",
@@ -329,7 +342,7 @@ func DefaultConfig(configPath string) Config {
 					"user_input": {
 						Recall: HookRecallConfig{
 							Enabled: true, Profile: "passive", QueryTemplate: "{{ .prompt }}", MaxResults: defaultHookRecallMaxResults,
-							Timeout: defaultPassiveRecallTimeout, Output: "markdown",
+							TimeoutExtra: defaultPassiveRecallTimeoutExtra, Output: "markdown",
 							Insertion: HookInsertionConfig{MinScore: defaultHookInsertionMinScore, MaxItems: defaultHookInsertionMaxItems, RequireQueryTerms: true},
 							Initial:   defaultInitialHookRecall(),
 						},
@@ -367,7 +380,7 @@ func DefaultConfig(configPath string) Config {
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    defaultHookRecallMaxResults,
-							Timeout:       defaultPassiveRecallTimeout,
+							TimeoutExtra:  defaultPassiveRecallTimeoutExtra,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
 								MinScore:          defaultHookInsertionMinScore,
@@ -428,7 +441,7 @@ func DefaultConfig(configPath string) Config {
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    defaultHookRecallMaxResults,
-							Timeout:       defaultPassiveRecallTimeout,
+							TimeoutExtra:  defaultPassiveRecallTimeoutExtra,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
 								MinScore:          defaultHookInsertionMinScore,
@@ -477,7 +490,7 @@ func DefaultConfig(configPath string) Config {
 							Profile:       "passive",
 							QueryTemplate: "{{ .prompt }}",
 							MaxResults:    defaultHookRecallMaxResults,
-							Timeout:       defaultPassiveRecallTimeout,
+							TimeoutExtra:  defaultPassiveRecallTimeoutExtra,
 							Output:        "markdown",
 							Insertion: HookInsertionConfig{
 								MinScore:          defaultHookInsertionMinScore,
@@ -661,9 +674,15 @@ func validateAgentRecallTimeouts(agents map[string]AgentConfig) error {
 			if err := validatePositiveDuration(hook.Recall.Timeout); err != nil {
 				return fmt.Errorf("agent %q hook %q recall timeout: %w", name, event, err)
 			}
+			if err := validatePositiveDuration(hook.Recall.TimeoutExtra); err != nil {
+				return fmt.Errorf("agent %q hook %q recall timeout_extra: %w", name, event, err)
+			}
 			if hook.Recall.Initial != nil {
 				if err := validatePositiveDuration(hook.Recall.Initial.Timeout); err != nil {
 					return fmt.Errorf("agent %q hook %q initial recall timeout: %w", name, event, err)
+				}
+				if err := validatePositiveDuration(hook.Recall.Initial.TimeoutExtra); err != nil {
+					return fmt.Errorf("agent %q hook %q initial recall timeout_extra: %w", name, event, err)
 				}
 			}
 		}
@@ -782,11 +801,7 @@ func normalizeProfiles(cfg *Config, renamedLegacyLocal bool) {
 	for name, profile := range cfg.RecallProfiles {
 		profile = normalizeRecallProfile(profile)
 		if name == "passive" || name == "passive_initial" {
-			for i := range profile.Providers {
-				if profile.Providers[i].Timeout == "" {
-					profile.Providers[i].Timeout = defaultProviderRecallTimeout
-				}
-			}
+			profile.Providers = normalizePassiveProviderRoutes(profile.Providers, cfg.Providers)
 		}
 		cfg.RecallProfiles[name] = profile
 	}
@@ -810,6 +825,20 @@ func normalizeProfiles(cfg *Config, renamedLegacyLocal bool) {
 		cfg.WriteProfiles[name] = normalizeWriteProfile(name, profile)
 	}
 	ensureMemoryTierWriteProfiles(cfg)
+}
+
+func normalizePassiveProviderRoutes(routes []ProviderRouteConfig, providers map[string]ProviderConfig) []ProviderRouteConfig {
+	for i := range routes {
+		route := &routes[i]
+		providerType := providers[route.Name].Type
+		if route.Timeout == "" || (providerType == "mem0-cloud" && route.Timeout == defaultProviderRecallTimeout) {
+			route.Timeout = DefaultProviderRecallTimeout(providerType)
+		}
+		if providerType == "mem0-cloud" && route.Thresholds == nil {
+			route.Thresholds = defaultCloudThresholds()
+		}
+	}
+	return routes
 }
 
 func normalizeAgents(cfg *Config) {
@@ -892,6 +921,13 @@ func normalizeProviderConfig(provider ProviderConfig) ProviderConfig {
 	}
 	if provider.BaseURL == "" && provider.Type == "mem0" {
 		provider.BaseURL = defaultMem0BaseURL
+	}
+	if provider.BaseURL == "" && provider.Type == "mem0-cloud" {
+		provider.BaseURL = defaultMem0CloudBaseURL
+	}
+	if provider.Type == "mem0-cloud" && provider.Infer == nil {
+		infer := false
+		provider.Infer = &infer
 	}
 	if provider.Transport == "" && provider.Type == "jsonrpc" {
 		provider.Transport = defaultJSONRPCTransport
@@ -1028,6 +1064,21 @@ func DefaultMem0BaseURL() string {
 	return defaultMem0BaseURL
 }
 
+func DefaultMem0CloudBaseURL() string {
+	return defaultMem0CloudBaseURL
+}
+
+func DefaultProviderRecallTimeout(providerType string) string {
+	if providerType == "mem0-cloud" {
+		return defaultCloudRecallTimeout
+	}
+	return defaultProviderRecallTimeout
+}
+
+func defaultCloudThresholds() *RecallThresholdConfig {
+	return &RecallThresholdConfig{MinRelevance: defaultCloudRecallThreshold, MinScore: defaultCloudRecallThreshold}
+}
+
 func DefaultSTMExpiresAfter() string {
 	return defaultSTMExpiresAfter
 }
@@ -1151,8 +1202,12 @@ func normalizeHookRecall(name string, hook AgentHookConfig) AgentHookConfig {
 	if hook.Recall.Output == "" {
 		hook.Recall.Output = "markdown"
 	}
-	if hook.Recall.Enabled && hook.Recall.Timeout == "" {
-		hook.Recall.Timeout = defaultPassiveRecallTimeout
+	if hook.Recall.Enabled && hook.Recall.Timeout == "" && hook.Recall.TimeoutExtra == "" {
+		hook.Recall.TimeoutExtra = defaultPassiveRecallTimeoutExtra
+	}
+	if hook.Recall.Timeout == defaultPassiveRecallTimeout && hook.Recall.TimeoutExtra == "" {
+		hook.Recall.Timeout = ""
+		hook.Recall.TimeoutExtra = defaultPassiveRecallTimeoutExtra
 	}
 	if hook.Recall.Initial != nil {
 		normalizeInitialHookRecall(hook.Recall.Initial, hook.Recall)
@@ -1170,8 +1225,9 @@ func normalizeInitialHookRecall(initial *HookInitialRecall, recall HookRecallCon
 	if initial.MaxResults == 0 {
 		initial.MaxResults = recall.MaxResults
 	}
-	if initial.Timeout == "" {
+	if initial.Timeout == "" && initial.TimeoutExtra == "" {
 		initial.Timeout = recall.Timeout
+		initial.TimeoutExtra = recall.TimeoutExtra
 	}
 }
 

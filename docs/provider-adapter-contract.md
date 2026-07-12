@@ -1,16 +1,16 @@
 # Provider Adapter Contract
 
 Every paxm provider adapter must satisfy the same boundary contract. The shared
-test harness lives in `internal/adapters/contracttest`; SQLite, Mem0, Zep, and
-JSON-RPC each run it with a provider-specific fixture.
+test harness lives in `internal/adapters/contracttest`; SQLite, Mem0, Mem0
+Cloud, Zep, and JSON-RPC each run it with a provider-specific fixture.
 
-| Shared contract | SQLite | Mem0 | Zep | JSON-RPC |
-| --- | --- | --- | --- | --- |
-| Stable provider name | yes | yes | yes | yes |
-| Health semantics | yes | yes | yes | yes |
-| Write acknowledgement maps to provider/ref ID | yes | yes | yes | yes |
-| Search returns provider/ID/text faithfully | yes | yes | yes | yes |
-| Context cancellation propagates | yes | yes | yes | yes |
+| Shared contract | SQLite | Mem0 | Mem0 Cloud | Zep | JSON-RPC |
+| --- | --- | --- | --- | --- | --- |
+| Stable provider name | yes | yes | yes | yes | yes |
+| Health semantics | yes | yes | yes | yes | yes |
+| Write acknowledgement maps to provider/ref ID | yes | yes | yes | yes | yes |
+| Search returns provider/ID/text faithfully | yes | yes | yes | yes | yes |
+| Context cancellation propagates | yes | yes | yes | yes | yes |
 
 The contract deliberately does not require equal ranking, semantic recall,
 consolidation, latency, or result counts. Those are provider capabilities, not

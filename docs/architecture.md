@@ -65,6 +65,8 @@ Current provider adapters:
   episodes and maps graph search results into memory hits.
 - `mem0`: self-hosted Mem0 OSS REST storage; writes text through
   `POST /memories` and maps `POST /search` results into memory hits.
+- `mem0-cloud`: managed Mem0 Platform storage; encapsulates Token auth,
+  asynchronous v3 writes, event polling, v3 search, and eval-scope cleanup.
 - `jsonrpc`: custom stdio plugin storage. The plugin implements the provider
   contract with JSON-RPC 2.0 methods while paxm keeps routing, thresholds, and
   ranking in core.
@@ -106,13 +108,27 @@ A recall profile is the policy boundary for reads. It chooses:
 - ranking behavior;
 - memory tiers (`stm`, `ltm`) to search.
 
-`min_relevance` filters provider-normalized hits before cross-provider ranking.
-`min_score` filters the final merged score after route weight and ranking boosts.
+Adapters normalize native relevance to `[0,1]`, but those values are not assumed
+to be distribution-compatible across providers. For each query, the router
+sorts each provider's candidates by native relevance and derives a separate
+internal ranking score as `normalized relevance / provider rank²`. Squared
+reciprocal rank limits a flat-score provider from occupying the merged result set, while
+the absolute relevance term ensures weak evidence is never promoted above its
+adapter score. This is deterministic score normalization, not a claim that
+vendor scores are calibrated probabilities. The original backend score and
+adapter-normalized relevance remain on the hit for diagnostics and offline eval.
+The ranking score stays inside the memory router; provider, facade, CLI, MCP,
+and JSON-RPC interfaces retain their existing score fields and semantics.
+
+`min_relevance` filters adapter-normalized relevance and `min_score` filters its
+weighted/recency-adjusted public score, preserving their existing meanings.
+Surviving hits are ordered by the internal calibrated ranking score.
 Provider-route thresholds override the profile default for that provider only.
 The router asks each provider for a bounded candidate pool larger than the final
 limit, then applies thresholds and cross-provider deduplication. Duplicate text
 keeps the highest-scoring hit with deterministic tie-breaking, so concurrent
-provider completion order cannot change the winner.
+provider completion order cannot change the winner. This calibration seam is
+provider-agnostic and therefore also applies to custom JSON-RPC adapters.
 
 Passive hook recall should not use one policy for every turn. The default
 `passive_initial` profile is used only for the first `user_input` observed for a

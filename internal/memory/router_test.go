@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -327,6 +328,124 @@ func TestRouterSearchAppliesPolicyThresholds(t *testing.T) {
 	}
 	if result.Hits[0].Score != 0.4 {
 		t.Fatalf("expected weighted final score, got %f", result.Hits[0].Score)
+	}
+}
+
+func TestRouterCalibratesAllProviderScoreDistributions(t *testing.T) {
+	t.Parallel()
+	providers := []struct {
+		name         string
+		rawScoreKind string
+		scores       []float64
+	}{
+		{name: "sqlite", rawScoreKind: "sqlite_fts_bm25_negated", scores: []float64{1, 0.75}},
+		{name: "zep", rawScoreKind: "zep_relevance", scores: []float64{1, 0.99993503}},
+		{name: "mem0", rawScoreKind: "mem0_score", scores: []float64{0.91, 0.82}},
+		{name: "mem0_cloud", rawScoreKind: "mem0_cloud_score", scores: []float64{0.2793, 0.21}},
+		{name: "jsonrpc", rawScoreKind: "jsonrpc_relevance", scores: []float64{0.9, 0.6}},
+	}
+	bindings := make([]ProviderBinding, 0, len(providers))
+	for _, provider := range providers {
+		hits := []MemoryHit{
+			{ID: provider.name + "-top", Text: provider.name + " top", Relevance: provider.scores[0], RawScoreKind: provider.rawScoreKind},
+			{ID: provider.name + "-second", Text: provider.name + " second", Relevance: provider.scores[1], RawScoreKind: provider.rawScoreKind},
+		}
+		bindings = append(bindings, ProviderBinding{Provider: fakeProvider{name: provider.name, hits: hits}, Read: true})
+	}
+	router, err := NewRouter(bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "memory", Limit: 10}, SearchPolicy{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 10 {
+		t.Fatalf("hits = %#v", result.Hits)
+	}
+	seen := make(map[string]bool)
+	for _, hit := range result.Hits {
+		seen[hit.Provider] = true
+	}
+	for _, provider := range providers {
+		if !seen[provider.name] {
+			t.Fatalf("provider %q was dominated after calibration: %#v", provider.name, result.Hits)
+		}
+	}
+}
+
+func TestRouterCalibrationPreventsFlatProviderFromMonopolizingResults(t *testing.T) {
+	t.Parallel()
+
+	flat := make([]MemoryHit, 20)
+	for i := range flat {
+		flat[i] = MemoryHit{ID: fmt.Sprintf("zep-%02d", i), Text: fmt.Sprintf("flat %d", i), Relevance: 0.9999 - float64(i)*0.000001}
+	}
+	router, err := NewRouter([]ProviderBinding{
+		{Provider: fakeProvider{name: "zep", hits: flat}, Read: true},
+		{Provider: fakeProvider{name: "sqlite", hits: []MemoryHit{{ID: "sqlite-1", Text: "sqlite top", Relevance: 1}, {ID: "sqlite-2", Text: "sqlite second", Relevance: 0.7}}}, Read: true},
+		{Provider: fakeProvider{name: "mem0", hits: []MemoryHit{{ID: "mem0-1", Text: "mem0 top", Relevance: 0.8}, {ID: "mem0-2", Text: "mem0 second", Relevance: 0.5}}}, Read: true},
+		{Provider: fakeProvider{name: "mem0-cloud", hits: []MemoryHit{{ID: "cloud-1", Text: "cloud top", Relevance: 0.21}, {ID: "cloud-2", Text: "cloud second", Relevance: 0.2}}}, Read: true},
+		{Provider: fakeProvider{name: "jsonrpc", hits: []MemoryHit{{ID: "rpc-1", Text: "rpc top", Relevance: 0.9}, {ID: "rpc-2", Text: "rpc second", Relevance: 0.6}}}, Read: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "memory", Limit: 10}, SearchPolicy{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := make(map[string]int)
+	positions := make(map[string]int)
+	for index, hit := range result.Hits {
+		counts[hit.Provider]++
+		positions[hit.ID] = index
+	}
+	for _, provider := range []string{"sqlite", "zep", "mem0", "mem0-cloud", "jsonrpc"} {
+		if counts[provider] == 0 {
+			t.Fatalf("provider %q absent from realistic top-10: %#v", provider, result.Hits)
+		}
+	}
+	if counts["zep"] > 3 {
+		t.Fatalf("flat provider monopolized top-10 with %d hits: %#v", counts["zep"], result.Hits)
+	}
+	if positions["cloud-1"] >= positions["zep-02"] {
+		t.Fatalf("third flat Zep hit outranked Cloud relevance 0.21: %#v", result.Hits)
+	}
+}
+
+func TestRouterCalibrationRanksOnlyPolicyEligibleCandidates(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	expired := now.Add(-time.Hour)
+	valid := MemoryHit{ID: "valid", Text: "valid memory", Relevance: 0.8, Tier: TierLTM}
+	search := func(hits []MemoryHit) MemoryHit {
+		t.Helper()
+		router, err := NewRouter([]ProviderBinding{{Provider: fakeProvider{name: "provider", hits: hits}, Read: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "memory", Limit: 5}, SearchPolicy{
+			Limit: 5, MinRelevance: 0.5, Tiers: []MemoryTier{TierLTM},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Hits) != 1 || result.Hits[0].ID != valid.ID {
+			t.Fatalf("eligible hits = %#v", result.Hits)
+		}
+		return result.Hits[0]
+	}
+
+	solo := search([]MemoryHit{valid})
+	withIneligible := search([]MemoryHit{
+		{ID: "expired", Text: "expired", Relevance: 1, Tier: TierLTM, ExpiresAt: &expired},
+		{ID: "wrong-tier", Text: "short term", Relevance: 0.95, Tier: TierSTM},
+		{ID: "below-threshold", Text: "weak", Relevance: 0.4, Tier: TierLTM},
+		valid,
+	})
+	if withIneligible.rankingScore != solo.rankingScore || withIneligible.rankingScore != valid.Relevance {
+		t.Fatalf("ineligible candidates changed rank: solo=%#v with=%#v", solo, withIneligible)
 	}
 }
 
