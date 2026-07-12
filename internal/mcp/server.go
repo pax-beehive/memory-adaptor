@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pax-beehive/memory-adaptor/internal/config"
-	"github.com/pax-beehive/memory-adaptor/internal/facade"
 	paxruntime "github.com/pax-beehive/memory-adaptor/internal/runtime"
 	"github.com/pax-beehive/memory-adaptor/internal/telemetry"
+	"github.com/pax-beehive/memory-adaptor/internal/tools"
 )
 
 const protocolVersion = "2025-11-25"
@@ -206,24 +205,6 @@ func toolDefinitions() []toolDefinition {
 				"metadata": stringMapSchema("Optional metadata to store with the memory."),
 			}, []string{"text"}),
 		},
-		{
-			Name:        "paxm_history",
-			Title:       "Memory History",
-			Description: "Summarize recent local paxm telemetry.",
-			InputSchema: objectSchema(map[string]any{
-				"days": map[string]any{
-					"type":        "integer",
-					"minimum":     1,
-					"description": "Number of days to summarize. Defaults to 7.",
-				},
-			}, nil),
-		},
-		{
-			Name:        "paxm_config_doctor",
-			Title:       "Config Doctor",
-			Description: "Check health for enabled paxm memory providers without returning secrets.",
-			InputSchema: objectSchema(nil, nil),
-		},
 	}
 }
 
@@ -276,10 +257,6 @@ func (s *Server) callTool(ctx context.Context, params json.RawMessage) (toolResu
 		return s.callRecall(ctx, call.Arguments), nil
 	case "paxm_remember":
 		return s.callRemember(ctx, call.Arguments), nil
-	case "paxm_history":
-		return s.callHistory(call.Arguments), nil
-	case "paxm_config_doctor":
-		return s.callConfigDoctor(ctx, call.Arguments), nil
 	default:
 		return toolResult{}, rpcError{Code: -32602, Message: fmt.Sprintf("unknown tool %q", call.Name)}
 	}
@@ -312,7 +289,7 @@ func (s *Server) callRecall(ctx context.Context, raw json.RawMessage) toolResult
 		return errorToolResult(err)
 	}
 	started := time.Now()
-	result, opErr := rt.Service.Recall(ctx, facade.RecallInput{
+	result, opErr := rt.Tools.Recall(ctx, tools.RecallInput{
 		Query:   args.Query,
 		Profile: args.Profile,
 		Limit:   limit,
@@ -352,7 +329,7 @@ func (s *Server) callRemember(ctx context.Context, raw json.RawMessage) toolResu
 		return errorToolResult(err)
 	}
 	started := time.Now()
-	result, opErr := rt.Service.Ingest(ctx, facade.IngestInput{
+	result, opErr := rt.Tools.Remember(ctx, tools.RememberInput{
 		ID:       args.ID,
 		Text:     args.Text,
 		Profile:  args.Profile,
@@ -366,51 +343,6 @@ func (s *Server) callRemember(ctx context.Context, raw json.RawMessage) toolResu
 		return errorToolResultWithContent(opErr, result)
 	}
 	return structuredToolResult(result)
-}
-
-type historyArgs struct {
-	Days *int `json:"days,omitempty"`
-}
-
-func (s *Server) callHistory(raw json.RawMessage) toolResult {
-	var args historyArgs
-	if err := decodeToolArgs(raw, &args); err != nil {
-		return errorToolResult(err)
-	}
-	cfg, err := config.Load(paxruntime.ConfigFile(s.configPath))
-	if err != nil {
-		return errorToolResult(err)
-	}
-	days := args.Days
-	if days == nil {
-		defaultDays := 7
-		days = &defaultDays
-	}
-	if *days < 1 {
-		return errorToolResult(errors.New("days must be at least 1"))
-	}
-	recorder := telemetry.NewRecorder(cfg.Telemetry, paxruntime.ConfigFile(s.configPath))
-	summary, err := recorder.History(*days)
-	if err != nil {
-		return errorToolResult(err)
-	}
-	return structuredToolResult(summary)
-}
-
-func (s *Server) callConfigDoctor(ctx context.Context, raw json.RawMessage) toolResult {
-	var args struct{}
-	if err := decodeToolArgs(raw, &args); err != nil {
-		return errorToolResult(err)
-	}
-	rt, err := paxruntime.Load(s.configPath)
-	if err != nil {
-		return errorToolResult(err)
-	}
-	statuses, opErr := rt.Health(ctx)
-	if opErr != nil {
-		return errorToolResultWithContent(opErr, map[string]any{"statuses": statuses})
-	}
-	return structuredToolResult(statuses)
 }
 
 func decodeParams(raw json.RawMessage, out any) error {
@@ -442,28 +374,28 @@ func structuredToolResult(value any) toolResult {
 	}
 }
 
-func recallToolResult(value facade.RecallResult) toolResult {
+func recallToolResult(value tools.RecallResult) toolResult {
 	structured := struct {
-		facade.RecallResult
+		tools.RecallResult
 		PaxmContext map[string]any `json:"paxm_context"`
 	}{
 		RecallResult: value,
 		PaxmContext:  recallContextMetadata(),
 	}
 	return toolResult{
-		Content:           []textContent{{Type: "text", Text: facade.WrapRecallContext("active", jsonText(value))}},
+		Content:           []textContent{{Type: "text", Text: tools.WrapRecallContext("active", jsonText(value))}},
 		StructuredContent: structured,
 	}
 }
 
-func recallErrorToolResult(err error, result facade.RecallResult) toolResult {
+func recallErrorToolResult(err error, result tools.RecallResult) toolResult {
 	content := map[string]any{
 		"error":        err.Error(),
 		"result":       result,
 		"paxm_context": recallContextMetadata(),
 	}
 	return toolResult{
-		Content:           []textContent{{Type: "text", Text: facade.WrapRecallContext("active", jsonText(content))}},
+		Content:           []textContent{{Type: "text", Text: tools.WrapRecallContext("active", jsonText(content))}},
 		StructuredContent: content,
 		IsError:           true,
 	}
@@ -512,7 +444,7 @@ func (e rpcError) Error() string {
 	return e.Message
 }
 
-func (s *Server) recordRecall(rt *paxruntime.Runtime, profile, query string, result facade.RecallResult, duration time.Duration, opErr error) error {
+func (s *Server) recordRecall(rt *paxruntime.Runtime, profile, query string, result tools.RecallResult, duration time.Duration, opErr error) error {
 	event := paxruntime.RecallTelemetryEvent(rt.Config, paxruntime.RecallTelemetryInput{
 		Kind:     "recall",
 		Source:   "mcp",
@@ -526,7 +458,7 @@ func (s *Server) recordRecall(rt *paxruntime.Runtime, profile, query string, res
 	return recorder.Record(event)
 }
 
-func (s *Server) recordRemember(rt *paxruntime.Runtime, profile string, itemCount int, result facade.IngestResult, duration time.Duration, opErr error) error {
+func (s *Server) recordRemember(rt *paxruntime.Runtime, profile string, itemCount int, result tools.RememberResult, duration time.Duration, opErr error) error {
 	event := paxruntime.RememberTelemetryEvent(rt.Config, paxruntime.RememberTelemetryInput{
 		Kind:      "remember",
 		Source:    "mcp",

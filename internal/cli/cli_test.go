@@ -17,6 +17,7 @@ import (
 	"time"
 
 	zepadapter "github.com/pax-beehive/memory-adaptor/internal/adapters/zep"
+	"github.com/pax-beehive/memory-adaptor/internal/capture"
 	"github.com/pax-beehive/memory-adaptor/internal/config"
 	paxeval "github.com/pax-beehive/memory-adaptor/internal/eval"
 	"github.com/pax-beehive/memory-adaptor/internal/facade"
@@ -322,7 +323,7 @@ func TestCLISetupCodexPluginOwnsHooks(t *testing.T) {
 
 func TestCLIHookSourceMatchesConfiguredCodexOwner(t *testing.T) {
 	cfg := config.DefaultConfig(filepath.Join(t.TempDir(), "config.yaml"))
-	event := facade.HookEvent{Target: "codex", Event: "user_input"}
+	event := capture.Event{Target: "codex", Event: "user_input"}
 	if !hookSourceAllowed(cfg, event) {
 		t.Fatal("paxm-owned Codex hooks should be allowed without a plugin marker")
 	}
@@ -937,7 +938,7 @@ func TestInternalCodexUserInputHookEmitsNativeContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hookSourceAllowed(loaded, facade.HookEvent{Target: "codex", Event: "user_input"}) {
+	if !hookSourceAllowed(loaded, capture.Event{Target: "codex", Event: "user_input"}) {
 		t.Fatalf("plugin-owned Codex hook source was unexpectedly rejected: owner=%q env=%q", loaded.Agents["codex"].Integration.Owner, os.Getenv("PAXM_INTEGRATION_OWNER"))
 	}
 
@@ -1118,7 +1119,7 @@ func TestDecodeClaudePostToolUseFailureCapturesInputAndError(t *testing.T) {
 }
 
 func TestDedupeHookMessagesRemovesWrappedToolDuplicates(t *testing.T) {
-	messages := dedupeHookMessages([]facade.HookMessage{{Role: "tool_call", Text: "Read README.md"}, {Role: "tool_call", Text: "Read README.md"}, {Role: "tool_result", Text: "contents"}})
+	messages := dedupeHookMessages([]capture.Message{{Role: "tool_call", Text: "Read README.md"}, {Role: "tool_call", Text: "Read README.md"}, {Role: "tool_result", Text: "contents"}})
 	if len(messages) != 2 {
 		t.Fatalf("messages = %#v", messages)
 	}
@@ -1157,90 +1158,41 @@ func TestCodexTranscriptToolMessagesReadsCurrentTurnAndExcludesReasoning(t *test
 	}
 }
 
-func TestHookCleanupWorkerSchedulesWithoutBlockingAndDrainsOnClose(t *testing.T) {
-	cleanupStarted := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	cleanupFinished := make(chan struct{})
-	worker := newHookCleanupWorker(func(context.Context) {
-		close(cleanupStarted)
-		<-releaseCleanup
-		close(cleanupFinished)
-	})
-
-	scheduled := make(chan struct{})
-	go func() {
-		worker.Schedule()
-		close(scheduled)
-	}()
-	select {
-	case <-scheduled:
-	case <-time.After(time.Second):
-		t.Fatal("cleanup scheduling blocked the hook path")
-	}
-	select {
-	case <-cleanupStarted:
-	case <-time.After(time.Second):
-		t.Fatal("scheduled cleanup did not start")
-	}
-
-	closed := make(chan struct{})
-	go func() {
-		worker.Close()
-		close(closed)
-	}()
-	select {
-	case <-closed:
-		t.Fatal("worker closed before scheduled cleanup completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(releaseCleanup)
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("worker did not close after cleanup completed")
-	}
-	select {
-	case <-cleanupFinished:
-	default:
-		t.Fatal("worker close did not drain scheduled cleanup")
-	}
-}
-
 func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.DefaultConfig(configPath)
 	r := runner{configPath: configPath, stderr: &bytes.Buffer{}}
 
-	first := r.markInitialUserInputRecall(cfg, facade.HookEvent{
+	first := r.markInitialUserInputRecall(cfg, capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
 			"session_id": "session-a",
 		},
 	})
-	if first.Metadata[facade.HookRecallPhaseMetadataKey] != facade.HookRecallPhaseInitial {
+	if first.Metadata[capture.RecallPhaseMetadataKey] != capture.RecallPhaseInitial {
 		t.Fatalf("first user_input should use initial recall: %#v", first.Metadata)
 	}
 
-	second := r.markInitialUserInputRecall(cfg, facade.HookEvent{
+	second := r.markInitialUserInputRecall(cfg, capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
 			"session_id": "session-a",
 		},
 	})
-	if second.Metadata[facade.HookRecallPhaseMetadataKey] != "" {
+	if second.Metadata[capture.RecallPhaseMetadataKey] != "" {
 		t.Fatalf("second user_input should stay strict: %#v", second.Metadata)
 	}
 
-	nextSession := r.markInitialUserInputRecall(cfg, facade.HookEvent{
+	nextSession := r.markInitialUserInputRecall(cfg, capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
 			"session_id": "session-b",
 		},
 	})
-	if nextSession.Metadata[facade.HookRecallPhaseMetadataKey] != facade.HookRecallPhaseInitial {
+	if nextSession.Metadata[capture.RecallPhaseMetadataKey] != capture.RecallPhaseInitial {
 		t.Fatalf("new session should use initial recall: %#v", nextSession.Metadata)
 	}
 }
