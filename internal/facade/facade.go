@@ -157,7 +157,7 @@ func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, err
 	}
 	recallCtx := ctx
 	cancel := func() {}
-	if timeout, parseErr := time.ParseDuration(recallCfg.Timeout); parseErr == nil && timeout > 0 {
+	if timeout := hookRecallOverallTimeout(recallCfg, s.cfg.RecallProfiles[recallCfg.Profile]); timeout > 0 {
 		recallCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer cancel()
@@ -193,11 +193,38 @@ func effectiveHookRecallConfig(recall config.HookRecallConfig, event HookEvent) 
 	}
 	if initial.Timeout != "" {
 		recall.Timeout = initial.Timeout
+		if initial.TimeoutExtra == "" {
+			recall.TimeoutExtra = ""
+		}
+	}
+	if initial.TimeoutExtra != "" {
+		recall.TimeoutExtra = initial.TimeoutExtra
 	}
 	if initial.Insertion != (config.HookInsertionConfig{}) {
 		recall.Insertion = initial.Insertion
 	}
 	return recall
+}
+
+func hookRecallOverallTimeout(recall config.HookRecallConfig, profile config.RecallProfileConfig) time.Duration {
+	extra, err := time.ParseDuration(recall.TimeoutExtra)
+	if err == nil && extra > 0 {
+		var longest time.Duration
+		for _, route := range profile.Providers {
+			timeout, parseErr := time.ParseDuration(route.Timeout)
+			if parseErr == nil && timeout > longest {
+				longest = timeout
+			}
+		}
+		if longest > 0 {
+			return longest + extra
+		}
+	}
+	timeout, err := time.ParseDuration(recall.Timeout)
+	if err == nil && timeout > 0 {
+		return timeout
+	}
+	return 0
 }
 
 func (s *Service) HookWriteItem(event HookEvent) (IngestInput, bool, error) {

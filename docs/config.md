@@ -140,7 +140,7 @@ agents:
           profile: passive
           query_template: "{{ .prompt }}"
           max_results: 2
-          timeout: 800ms
+          timeout_extra: 100ms
           output: markdown
           insertion:
             min_score: 0.8
@@ -427,8 +427,11 @@ Recall timeout fields:
 
 - A provider route `timeout` limits that downstream independently. Passive
   profiles default to `250ms`, so one slow provider cannot delay healthy hits.
-- A hook recall `timeout` limits the complete passive recall operation. It
-  defaults to `800ms` and returns any partial hits collected before the budget.
+- A hook recall `timeout_extra` derives the complete passive recall deadline as
+  the largest selected provider-route timeout plus this scheduling margin. New
+  configurations default the margin to `100ms`, so every provider gets its own
+  configured budget while the hook remains bounded. The legacy absolute
+  `timeout` remains supported when `timeout_extra` is omitted.
 
 Write provider routes use the same `timeout` field. Write profiles default to
 `30s`; a timed-out optional provider is reported without delaying healthy
@@ -446,10 +449,10 @@ recall_profiles:
         required: true
         weight: 1
         timeout: 250ms
-      - name: mem0_team
+      - name: mem0_cloud
         required: false
         weight: 1
-        timeout: 250ms
+        timeout: 800ms
         thresholds:
           min_relevance: 0.45
           min_score: 0.45

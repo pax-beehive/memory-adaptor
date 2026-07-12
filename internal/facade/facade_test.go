@@ -77,6 +77,24 @@ func TestRunHookOverallTimeoutReturnsWithoutFailing(t *testing.T) {
 	}
 }
 
+func TestHookRecallOverallTimeoutUsesLongestProviderPlusExtra(t *testing.T) {
+	recall := config.HookRecallConfig{Timeout: "20ms", TimeoutExtra: "100ms"}
+	profile := config.RecallProfileConfig{Providers: []config.ProviderRouteConfig{
+		{Name: "sqlite", Timeout: "250ms"},
+		{Name: "cloud", Timeout: "800ms"},
+	}}
+	if got, want := hookRecallOverallTimeout(recall, profile), 900*time.Millisecond; got != want {
+		t.Fatalf("hookRecallOverallTimeout() = %s, want %s", got, want)
+	}
+}
+
+func TestHookRecallOverallTimeoutFallsBackToLegacyAbsoluteTimeout(t *testing.T) {
+	recall := config.HookRecallConfig{Timeout: "800ms"}
+	if got, want := hookRecallOverallTimeout(recall, config.RecallProfileConfig{}), 800*time.Millisecond; got != want {
+		t.Fatalf("hookRecallOverallTimeout() = %s, want %s", got, want)
+	}
+}
+
 func TestRecallAdapterContractForwardsRequestAndPreservesProviderHit(t *testing.T) {
 	raw := 0.82
 	created := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)

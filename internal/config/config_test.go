@@ -103,7 +103,7 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 		t.Fatalf("initial passive recall should read LTM only: %#v", initialProfile)
 	}
 	hook := cfg.Agents["codex"].Hooks["user_input"].Recall
-	if hook.Profile != "passive" || hook.MaxResults != 2 || hook.Timeout != "800ms" {
+	if hook.Profile != "passive" || hook.MaxResults != 2 || hook.Timeout != "" || hook.TimeoutExtra != "100ms" {
 		t.Fatalf("user_input hook should use passive profile: %#v", hook)
 	}
 	if hook.Insertion.MinScore != 0.8 || hook.Insertion.MaxItems != 2 || !hook.Insertion.RequireQueryTerms {
@@ -168,6 +168,15 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	}
 	if ltm := cfg.WriteProfiles["ltm"]; ltm.Tier != "ltm" || ltm.ExpiresAfter != "" {
 		t.Fatalf("ltm write profile should be long-term: %#v", ltm)
+	}
+}
+
+func TestDefaultProviderRecallTimeoutUsesCloudBudget(t *testing.T) {
+	if got := DefaultProviderRecallTimeout("mem0-cloud"); got != "800ms" {
+		t.Fatalf("cloud timeout = %q", got)
+	}
+	if got := DefaultProviderRecallTimeout("sqlite"); got != "250ms" {
+		t.Fatalf("sqlite timeout = %q", got)
 	}
 }
 

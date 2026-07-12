@@ -1564,6 +1564,13 @@ func upsertRecallRoute(cfg *config.Config, provider string, required bool) {
 func upsertRecallRouteInProfile(cfg *config.Config, profileName, provider string, required bool) {
 	profile := cfg.RecallProfiles[profileName]
 	profile.Providers = config.UpsertProviderRoute(profile.Providers, provider, required)
+	if profileName == "passive" || profileName == "passive_initial" {
+		for i := range profile.Providers {
+			if profile.Providers[i].Name == provider && profile.Providers[i].Timeout == "" {
+				profile.Providers[i].Timeout = config.DefaultProviderRecallTimeout(cfg.Providers[provider].Type)
+			}
+		}
+	}
 	cfg.RecallProfiles[profileName] = profile
 }
 

@@ -1330,6 +1330,14 @@ func TestCLISetupInteractiveMem0CloudProvider(t *testing.T) {
 	if !cloud.Enabled || cloud.Type != "mem0-cloud" || cloud.APIKey != "cloud-key" || cloud.BaseURL != config.DefaultMem0CloudBaseURL() || cloud.UserID != "toddzheng" {
 		t.Fatalf("unexpected mem0 cloud config: %#v", cloud)
 	}
+	for _, profileName := range []string{"passive", "passive_initial"} {
+		profile := cfg.RecallProfiles[profileName]
+		for _, route := range profile.Providers {
+			if route.Name == "mem0_cloud" && route.Timeout != "800ms" {
+				t.Fatalf("%s mem0 cloud timeout = %q, want 800ms", profileName, route.Timeout)
+			}
+		}
+	}
 }
 
 func TestCLISetupEnsuresZepUserTarget(t *testing.T) {
