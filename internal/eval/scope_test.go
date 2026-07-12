@@ -65,6 +65,20 @@ func TestPrepareProviderScopeIsolatesMem0AndPersistsManifest(t *testing.T) {
 	}
 }
 
+func TestPrepareProviderScopeIsolatesMem0Cloud(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultConfig(filepath.Join(dir, "config.yaml"))
+	cfg.Providers["cloud"] = config.ProviderConfig{Type: "mem0-cloud", Enabled: true, APIKey: "test-key", UserID: "user"}
+	scope, err := PrepareProviderScope(cfg, "cloud", ScopeOptions{RunID: "cloud-run", ManifestDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := scope.Config.Providers["cloud"]
+	if provider.UserID != "" || provider.AgentID != "" || provider.RunID != "paxm-eval-cloud-run" || provider.Infer == nil || *provider.Infer {
+		t.Fatalf("isolated mem0 cloud provider = %#v", provider)
+	}
+}
+
 func TestPrepareProviderScopeUsesDisposableSQLitePath(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.DefaultConfig(filepath.Join(dir, "config.yaml"))

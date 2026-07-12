@@ -6,6 +6,7 @@ import (
 
 	jsonrpcadapter "github.com/pax-beehive/paxm/internal/adapters/jsonrpc"
 	mem0adapter "github.com/pax-beehive/paxm/internal/adapters/mem0"
+	mem0cloudadapter "github.com/pax-beehive/paxm/internal/adapters/mem0cloud"
 	sqliteadapter "github.com/pax-beehive/paxm/internal/adapters/sqlite"
 	zepadapter "github.com/pax-beehive/paxm/internal/adapters/zep"
 	"github.com/pax-beehive/paxm/internal/config"
@@ -28,6 +29,9 @@ func DefaultRegistry() Registry {
 	})
 	registry.Register("mem0", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
 		return mem0adapter.New(name, cfg)
+	})
+	registry.Register("mem0-cloud", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
+		return mem0cloudadapter.New(name, cfg)
 	})
 	registry.Register("jsonrpc", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
 		return jsonrpcadapter.New(name, cfg)

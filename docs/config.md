@@ -34,6 +34,13 @@ providers:
     api_key: "plain-text-mem0-api-key"
     user_id: todd
 
+  mem0_cloud:
+    type: mem0-cloud
+    enabled: false
+    base_url: https://api.mem0.ai
+    api_key: "plain-text-mem0-cloud-api-key"
+    user_id: todd
+
   jsonrpc:
     type: jsonrpc
     enabled: false
@@ -327,7 +334,7 @@ providers:
 
 Fields:
 
-- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, or `jsonrpc`.
+- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, `mem0-cloud`, or `jsonrpc`.
 - `enabled`: whether this provider can be used by profiles.
 - `path`: local SQLite provider database path.
 - `api_key`: optional plain-text API key for remote providers.
@@ -347,7 +354,7 @@ Fields:
 - `source_description`: optional Zep source description for writes.
 - `infer`: optional Mem0 write flag. Omit it to use the server default.
 
-V1 ships with `sqlite`, `zep`, `mem0`, and `jsonrpc` provider adapters. Zep
+V1 ships with `sqlite`, `zep`, `mem0`, `mem0-cloud`, and `jsonrpc` provider adapters. Zep
 requires `api_key` and exactly one of `user_id` or `graph_id`. If setup is
 configured for a Zep user graph, it idempotently creates the configured
 `user_id` when the user does not already exist.
@@ -357,6 +364,12 @@ without a `/v1` prefix, for example `http://localhost:8888`, and set at least
 one scope for paxm to use with `user_id`, `agent_id`, or `run_id`. Programmatic
 auth uses `api_key` as an `X-API-Key` header; leave it blank only for local Mem0
 deployments that intentionally run with auth disabled.
+
+Mem0 Cloud uses the separate `mem0-cloud` type. It defaults to
+`https://api.mem0.ai`, requires `api_key`, authenticates with `Authorization:
+Token`, and encapsulates the platform's asynchronous v3 add and search APIs.
+It uses the same scope and `infer` fields as the self-hosted adapter. Eval runs
+force `infer: false` and add an isolated `run_id` so their writes can be removed.
 
 JSON-RPC providers are custom plugin commands. Paxm invokes the command over
 stdio with one JSON-RPC 2.0 request per provider operation. The command should

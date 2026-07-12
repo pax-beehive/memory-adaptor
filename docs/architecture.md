@@ -65,6 +65,8 @@ Current provider adapters:
   episodes and maps graph search results into memory hits.
 - `mem0`: self-hosted Mem0 OSS REST storage; writes text through
   `POST /memories` and maps `POST /search` results into memory hits.
+- `mem0-cloud`: managed Mem0 Platform storage; encapsulates Token auth,
+  asynchronous v3 writes, event polling, v3 search, and eval-scope cleanup.
 - `jsonrpc`: custom stdio plugin storage. The plugin implements the provider
   contract with JSON-RPC 2.0 methods while paxm keeps routing, thresholds, and
   ranking in core.
