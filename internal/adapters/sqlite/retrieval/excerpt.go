@@ -53,34 +53,13 @@ func excerptHits(query string, hits []Hit) []Hit {
 func excerptQueryTerms(query string) []string {
 	terms := uniqueStrings(normalizeTerms(query))
 	result := make([]string, 0, len(terms))
-	hasSpeechConcept := false
-	for _, term := range terms {
-		if excerptCanonicalTerm(term) == "talk" {
-			hasSpeechConcept = true
-			break
-		}
-	}
 	for _, term := range terms {
 		if excerptStopWord(term) || shortASCIIExcerptTerm(term) {
 			continue
 		}
-		if hasSpeechConcept && term == "give" {
-			continue
-		}
-		result = append(result, excerptCanonicalTerm(term))
+		result = append(result, term)
 	}
 	return uniqueStrings(result)
-}
-
-func excerptCanonicalTerm(term string) string {
-	switch term {
-	case "speech", "speeches", "speak", "speaks", "speaking", "spoke", "spoken", "talk", "talked", "talking", "talks":
-		return "talk"
-	case "persue", "persued", "persuing", "pursue", "pursued", "pursuing":
-		return "pursue"
-	default:
-		return term
-	}
 }
 
 func excerptStopWord(term string) bool {
@@ -256,7 +235,7 @@ func excerptHasTemporalEvidence(text string) bool {
 func excerptMatchedTermCount(queryTerms []string, text string) int {
 	textSet := make(map[string]struct{})
 	for _, term := range normalizeTerms(text) {
-		textSet[excerptCanonicalTerm(term)] = struct{}{}
+		textSet[term] = struct{}{}
 	}
 	lowerText := strings.ToLower(text)
 	matched := 0
@@ -274,7 +253,7 @@ func excerptContainsPhrase(query string, queryTerms []string, text string) bool 
 	}
 	textTerms := make([]string, 0)
 	for _, term := range normalizeTerms(text) {
-		textTerms = append(textTerms, excerptCanonicalTerm(term))
+		textTerms = append(textTerms, term)
 	}
 	return strings.Contains(" "+strings.Join(textTerms, " ")+" ", " "+strings.Join(queryTerms, " ")+" ")
 }
@@ -282,7 +261,7 @@ func excerptContainsPhrase(query string, queryTerms []string, text string) bool 
 func excerptEvidenceDensity(matched int, text string) float64 {
 	terms := make([]string, 0)
 	for _, term := range normalizeTerms(text) {
-		terms = append(terms, excerptCanonicalTerm(term))
+		terms = append(terms, term)
 	}
 	unique := uniqueStrings(terms)
 	if len(unique) == 0 {

@@ -107,8 +107,11 @@ selects query-bearing source segments plus adjacent context, preserves a
 session timestamp when present, and prioritizes explicit date or duration
 evidence for temporal questions. The selected text is extractive: it never
 generates or paraphrases memory content and does not call an LLM or embedding
-model. Internal defaults cap the combined top-K context at 8,000 bytes and an
-individual hit at 2,400 bytes. These are SQLite implementation defaults rather
+model. Internal defaults allocate excerpt-eligible long hits from an 8,000-byte
+top-K target, with at most 2,400 bytes assigned to one hit. Short hits and long
+hits without usable lexical evidence remain unchanged, so this is a
+best-effort context target rather than a hard response-size limit for arbitrary
+caller-supplied top-K values. These are SQLite implementation defaults rather
 than public recall-profile settings; other providers are not processed by this
 path. Excerpted hits retain their ID, source, scores, and ordering and add
 `sqlite_excerpted` plus `sqlite_original_bytes` metadata for diagnosis.

@@ -316,35 +316,6 @@ func TestProviderSearchExcerptIgnoresQuestionStopWords(t *testing.T) {
 	}
 }
 
-func TestProviderSearchExcerptUsesBoundedSpeechVocabulary(t *testing.T) {
-	t.Parallel()
-
-	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = provider.Close() })
-	lines := make([]string, 0, 62)
-	for i := 0; i < 30; i++ {
-		lines = append(lines, "Caroline: I give a speech")
-	}
-	lines = append(lines, "Caroline: I talked about my journey at the school event last week and encouraged the students")
-	for i := 0; i < 30; i++ {
-		lines = append(lines, "Caroline: I give a speech")
-	}
-	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: strings.Join(lines, "\n")}); err != nil {
-		t.Fatal(err)
-	}
-
-	hits, err := provider.Search(context.Background(), memory.SearchQuery{Text: "When did Caroline give a speech at a school?", Limit: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) != 1 || !strings.Contains(hits[0].Text, "talked about my journey") {
-		t.Fatalf("speech vocabulary did not preserve the relevant evidence:\n%#v", hits)
-	}
-}
-
 func TestProviderSearchExcerptKeepsSessionTimestamp(t *testing.T) {
 	t.Parallel()
 
