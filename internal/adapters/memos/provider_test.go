@@ -112,7 +112,7 @@ func TestCloudUsesTokenAuthAndOpenMemShapes(t *testing.T) {
 			}
 			return jsonResponse(`{"data":{"memory_detail_list":[{"memory_id":"m2","memory_value":"uses Go","relativity":0.91,"update_time":"2026-07-12 10:30:00"}]}}`), nil
 		case "/api/openmem/v1/add/message":
-			if body["user_id"] != "u1" || body["agent_id"] != "opencode" {
+			if body["user_id"] != "u1" || body["agent_id"] != "opencode" || body["conversation_id"] != "receipt-1" || body["source"] != "paxm" {
 				t.Fatalf("unexpected add: %#v", body)
 			}
 			return jsonResponse(`{"code":0,"message":"ok"}`), nil

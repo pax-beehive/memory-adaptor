@@ -174,7 +174,7 @@ func (p *Provider) Put(ctx context.Context, item memory.MemoryItem) (memory.Memo
 	payload := map[string]any{"user_id": p.userID, "writable_cube_ids": []string{p.cubeID}, "async_mode": "sync", "mode": "fast", "messages": []map[string]string{{"role": "user", "content": text}}, "info": metadata}
 	if p.dialect == cloud {
 		path = "/add/message"
-		payload = map[string]any{"user_id": p.userID, "messages": []map[string]string{{"role": "user", "content": text}}, "metadata": metadata}
+		payload = map[string]any{"user_id": p.userID, "conversation_id": writeID, "messages": []map[string]string{{"role": "user", "content": text}}, "metadata": metadata, "source": "paxm"}
 		if p.agentID != "" {
 			payload["agent_id"] = p.agentID
 		}
