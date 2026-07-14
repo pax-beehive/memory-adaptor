@@ -262,6 +262,8 @@ event mappings, profile settings, and uninstall behavior.
   isolated while required-provider failures are returned to the caller.
 - Recall provenance is stripped before passive writes to prevent memory echo.
 - Exact LTM consolidation limits duplicate accumulation.
+- SQLite preserves completed agent turns as the recall unit with explicit
+  session, turn, and time boundaries.
 - Telemetry stores hashes and lengths by default, not raw recall queries.
 
 Historical imports are also resumable:

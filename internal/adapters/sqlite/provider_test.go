@@ -658,6 +658,49 @@ func TestProviderCleanupExpiredDeletesRows(t *testing.T) {
 	}
 }
 
+func TestProviderSearchReturnsTurnBoundaryMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 7, 13, 10, 0, 0, 123, time.UTC)
+	endedAt := startedAt.Add(3 * time.Minute)
+	_, err = provider.Put(context.Background(), memory.MemoryItem{
+		Text: "turn boundary marker",
+		Tier: memory.TierLTM,
+		Turn: &memory.TurnContext{
+			SessionID: "session-7",
+			TurnID:    "turn-42",
+			StartedAt: startedAt,
+			EndedAt:   endedAt,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{Text: "turn boundary marker", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits = %#v", hits)
+	}
+	want := map[string]string{
+		"session_id": "session-7",
+		"turn_id":    "turn-42",
+		"started_at": startedAt.Format(time.RFC3339Nano),
+		"ended_at":   endedAt.Format(time.RFC3339Nano),
+	}
+	for key, value := range want {
+		if hits[0].Metadata[key] != value {
+			t.Fatalf("metadata[%s] = %q, want %q: %#v", key, hits[0].Metadata[key], value, hits[0].Metadata)
+		}
+	}
+}
+
 func TestProviderSearchHandlesPunctuationHeavyQueries(t *testing.T) {
 	t.Parallel()
 

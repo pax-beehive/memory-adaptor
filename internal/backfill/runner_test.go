@@ -160,7 +160,7 @@ func TestTurnItemsAndSplitUTF8Table(t *testing.T) {
 			Assistant: "answer",
 			CreatedAt: createdAt,
 		}
-		items := turnItems(turn)
+		items := turnItems(turn, false)
 		if len(items) != 1 {
 			t.Fatalf("turnItems() = %#v", items)
 		}
@@ -183,12 +183,30 @@ func TestTurnItemsAndSplitUTF8Table(t *testing.T) {
 			User:      strings.Repeat("界", 9000),
 			Assistant: strings.Repeat("答", 9000),
 		}
-		items := turnItems(turn)
+		items := turnItems(turn, false)
 		if len(items) < 2 {
 			t.Fatalf("expected multipart items, got %#v", items)
 		}
 		if items[0].ID != "large-part-1" || items[0].Metadata["part"] != "1" || items[0].Metadata["parts"] == "" {
 			t.Fatalf("multipart metadata missing: %#v", items[0])
+		}
+	})
+
+	t.Run("sqlite preserves an unbounded turn", func(t *testing.T) {
+		turn := sessions.Turn{
+			ID:        "large",
+			Agent:     "codex",
+			SessionID: "session",
+			User:      strings.Repeat("question ", 4000),
+			Assistant: strings.Repeat("answer ", 4000),
+			CreatedAt: time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC),
+		}
+		items := turnItems(turn, true)
+		if len(items) != 1 || items[0].ID != "large" {
+			t.Fatalf("SQLite turn was split: %#v", items)
+		}
+		if items[0].Turn == nil || items[0].Turn.SessionID != "session" || items[0].Turn.TurnID != "large" {
+			t.Fatalf("turn boundary missing: %#v", items[0].Turn)
 		}
 	})
 }

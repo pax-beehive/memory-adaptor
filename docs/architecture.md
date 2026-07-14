@@ -320,6 +320,14 @@ and every event payload plus the assembled episode carries a SHA-256 checksum.
 Sessions that never emit `turn_end` are sealed as incomplete after the configured
 maximum episode age.
 
+The episode is the durable turn boundary, not a size-based text window. Its
+events are not split by rendered size; mixed write profiles may still produce
+one item per profile. For SQLite, paxm records `session_id`, `turn_id`,
+`started_at`, and `ended_at` on the stored memory. These fields stay internal to
+the SQLite adapter rather than becoming a metadata requirement for remote
+providers. SQLite may return a query-focused excerpt for an unusually large
+turn, but the complete turn remains stored as the evidence record.
+
 Each episode creates one independent delivery per write-profile provider. A
 background worker delivers different providers concurrently, preserves episode
 order within each provider/session partition, and records provider-specific ACK,
@@ -339,8 +347,9 @@ Backfill readers normalize Codex, Claude Code, and Pi JSONL histories into
 user/assistant turns. They discard system instructions, hidden reasoning, tool
 traffic, sidechains, and attachments. Each normalized turn receives a
 deterministic item ID, original timestamp, session ID, workspace, agent, and
-`backfill:<agent>` source. Oversized turns are split into bounded deterministic
-parts before entering the normal operator/router/provider write path.
+`backfill:<agent>` source. SQLite preserves each historical turn as one
+unbounded item. Other providers retain bounded deterministic splitting for
+oversized turns to respect their transport constraints.
 
 The target is an exact enabled provider name rather than a write profile. This
 keeps multiple Mem0 or custom provider instances unambiguous. Extraction rules

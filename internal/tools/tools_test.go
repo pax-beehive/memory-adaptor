@@ -43,8 +43,12 @@ func TestAgentInterfaceRecallsAndRemembersWithoutFacade(t *testing.T) {
 	cfg := config.DefaultConfig("config.yaml")
 	engine := New(cfg, router)
 	var agent Agent = engine
-	if _, err := agent.Remember(context.Background(), RememberInput{Text: "operator and tools are separate"}); err != nil {
+	turn := &memory.TurnContext{SessionID: "session", TurnID: "turn"}
+	if _, err := agent.Remember(context.Background(), RememberInput{Text: "operator and tools are separate", Turn: turn}); err != nil {
 		t.Fatal(err)
+	}
+	if provider.item.Turn != turn {
+		t.Fatalf("turn context was not forwarded: %#v", provider.item.Turn)
 	}
 	result, err := agent.Recall(context.Background(), RecallInput{Query: "operator tools"})
 	if err != nil {

@@ -24,15 +24,16 @@ type RecallResult struct {
 	TimedOut        bool                    `json:"timed_out,omitempty"`
 }
 type RememberInput struct {
-	ID            string            `json:"id,omitempty"`
-	Text          string            `json:"text"`
-	AdmissionText string            `json:"-"`
-	Profile       string            `json:"profile,omitempty"`
-	Source        string            `json:"source,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	CreatedAt     time.Time         `json:"created_at,omitempty"`
-	Tier          memory.MemoryTier `json:"tier,omitempty"`
-	ExpiresAt     *time.Time        `json:"expires_at,omitempty"`
+	ID            string              `json:"id,omitempty"`
+	Text          string              `json:"text"`
+	AdmissionText string              `json:"-"`
+	Profile       string              `json:"profile,omitempty"`
+	Source        string              `json:"source,omitempty"`
+	Metadata      map[string]string   `json:"metadata,omitempty"`
+	CreatedAt     time.Time           `json:"created_at,omitempty"`
+	Tier          memory.MemoryTier   `json:"tier,omitempty"`
+	ExpiresAt     *time.Time          `json:"expires_at,omitempty"`
+	Turn          *memory.TurnContext `json:"paxm_turn,omitempty"`
 }
 type RememberResult struct {
 	Refs           []memory.MemoryRef     `json:"refs"`
@@ -157,7 +158,7 @@ func itemFromInput(input RememberInput) (memory.MemoryItem, string, bool) {
 	} else {
 		created = created.UTC()
 	}
-	return memory.MemoryItem{ID: input.ID, Text: text, AdmissionText: input.AdmissionText, Source: input.Source, Metadata: input.Metadata, CreatedAt: created, Tier: input.Tier, ExpiresAt: input.ExpiresAt}, profile, true
+	return memory.MemoryItem{ID: input.ID, Text: text, AdmissionText: input.AdmissionText, Source: input.Source, Metadata: input.Metadata, CreatedAt: created, Tier: input.Tier, ExpiresAt: input.ExpiresAt, Turn: input.Turn}, profile, true
 }
 func (s *Engine) searchPolicy(name string, limit int) (memory.SearchPolicy, error) {
 	if strings.TrimSpace(name) == "" {
