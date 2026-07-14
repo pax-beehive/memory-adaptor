@@ -297,6 +297,13 @@ func TestDefaultRecallHelpers(t *testing.T) {
 	if DefaultMem0BaseURL() != defaultMem0BaseURL {
 		t.Fatalf("default mem0 base URL helper changed")
 	}
+	if DefaultOpenVikingBaseURL() != defaultOpenVikingBaseURL {
+		t.Fatalf("default OpenViking base URL helper changed")
+	}
+	openviking := DefaultConfig(filepath.Join(t.TempDir(), "config.yaml")).Providers["openviking"]
+	if openviking.Type != "openviking" || openviking.Enabled || openviking.BaseURL != defaultOpenVikingBaseURL {
+		t.Fatalf("unexpected default OpenViking provider: %#v", openviking)
+	}
 	if DefaultSTMExpiresAfter() != defaultSTMExpiresAfter {
 		t.Fatalf("default stm expiry helper changed")
 	}

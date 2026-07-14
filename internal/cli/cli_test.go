@@ -1815,6 +1815,7 @@ func TestSetupOptionHelpersTable(t *testing.T) {
 				"cloud":  {Type: "mem0-cloud"},
 				"mos":    {Type: "memos"},
 				"mosc":   {Type: "memos-cloud"},
+				"ov":     {Type: "openviking"},
 				"rpc":    {Type: "jsonrpc"},
 				"sqlite": {Type: "sqlite"},
 				"zed":    {Type: "zep"},
@@ -1826,7 +1827,7 @@ func TestSetupOptionHelpersTable(t *testing.T) {
 				"claude": {Enabled: true},
 			},
 		}
-		if got, want := providerOptionIDs(cfg), []string{"sqlite", "zed", "mem", "cloud", "mos", "mosc", "rpc", "custom"}; !reflect.DeepEqual(got, want) {
+		if got, want := providerOptionIDs(cfg), []string{"sqlite", "zed", "mem", "cloud", "mos", "mosc", "rpc", "ov", "custom"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("providerOptionIDs() = %#v, want %#v", got, want)
 		}
 		wantHooks := []setupOption{
@@ -1855,6 +1856,7 @@ func TestSetupOptionHelpersTable(t *testing.T) {
 			{name: "memos default", providerName: "memos", provider: config.ProviderConfig{Type: "memos"}, wantLabel: "MemOS", wantPriority: 4},
 			{name: "memos cloud default", providerName: "memos_cloud", provider: config.ProviderConfig{Type: "memos-cloud"}, wantLabel: "MemOS Cloud", wantPriority: 5},
 			{name: "jsonrpc default", providerName: "jsonrpc", provider: config.ProviderConfig{Type: "jsonrpc"}, wantLabel: "JSON-RPC", wantPriority: 6},
+			{name: "openviking default", providerName: "openviking", provider: config.ProviderConfig{Type: "openviking"}, wantLabel: "OpenViking", wantPriority: 7},
 			{name: "unknown", providerName: "other", provider: config.ProviderConfig{Type: "other"}, wantLabel: "other", wantPriority: 100},
 		}
 		for _, tt := range tests {

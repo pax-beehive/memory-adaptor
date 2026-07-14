@@ -58,6 +58,12 @@ providers:
     user_id: todd
     agent_id: opencode
 
+  openviking:
+    type: openviking
+    enabled: false
+    base_url: http://localhost:1933
+    api_key: "plain-text-openviking-api-key"
+
   jsonrpc:
     type: jsonrpc
     enabled: false
@@ -351,7 +357,7 @@ providers:
 
 Fields:
 
-- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, `mem0-cloud`, `memos`, `memos-cloud`, or `jsonrpc`.
+- `type`: adapter type, such as `sqlite`, `zep`, `mem0`, `mem0-cloud`, `memos`, `memos-cloud`, `openviking`, or `jsonrpc`.
 - `enabled`: whether this provider can be used by profiles.
 - `path`: local SQLite provider database path.
 - `api_key`: optional plain-text API key for remote providers.
@@ -360,7 +366,8 @@ Fields:
 - `command`: JSON-RPC plugin executable path.
 - `args`: optional JSON-RPC plugin command arguments.
 - `env`: optional environment variables for JSON-RPC plugin commands.
-- `timeout`: optional JSON-RPC plugin call timeout, such as `30s`.
+- `timeout`: optional provider HTTP/call timeout, such as `30s`. OpenViking
+  uses it for REST requests and JSON-RPC uses it for plugin calls.
 - `user_id`: Zep user graph target, or Mem0 user scope.
 - `agent_id`: Mem0 agent scope.
 - `run_id`: Mem0 run scope.
@@ -373,7 +380,8 @@ Fields:
 - `source_description`: optional Zep source description for writes.
 - `infer`: optional Mem0 write flag. Omit it to use the server default.
 
-V1 ships with `sqlite`, `zep`, `mem0`, `mem0-cloud`, `memos`, `memos-cloud`, and `jsonrpc` provider adapters. Zep
+V1 ships with `sqlite`, `zep`, `mem0`, `mem0-cloud`, `memos`, `memos-cloud`,
+`openviking`, and `jsonrpc` provider adapters. Zep
 requires `api_key` and exactly one of `user_id` or `graph_id`. If setup is
 configured for a Zep user graph, it idempotently creates the configured
 `user_id` when the user does not already exist.
@@ -409,6 +417,17 @@ API key sent as `Authorization: Token`, and scopes data by required `user_id`
 plus optional `agent_id`. The OpenMem write response does not guarantee a
 deletable memory ID, so destructive eval cleanup is unavailable; paid evals
 must opt into `--keep-memory` explicitly.
+
+OpenViking uses the self-hosted HTTP server, defaulting to
+`http://localhost:1933`. When configured, `api_key` is sent as `X-API-Key`;
+leave it blank only for a trusted local development deployment. Writes follow
+OpenViking's stable session lifecycle: create a session, add the memory as a
+user message, then commit it. Commit acknowledgement is synchronous, while
+memory extraction and indexing continue asynchronously in OpenViking. Recall
+uses `POST /api/v1/search/find`, requests only L2 memory contexts, and maps the
+native score and Viking URI into the paxm hit. Because OpenViking does not
+return one stable memory ID for a committed session, the adapter returns the
+commit task ID as a receipt and does not advertise per-memory deletion.
 
 JSON-RPC providers are custom plugin commands. Paxm invokes the command over
 stdio with one JSON-RPC 2.0 request per provider operation. The command should

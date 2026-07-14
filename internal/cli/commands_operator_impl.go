@@ -1178,6 +1178,8 @@ func providerOptionPriority(providerType string) int {
 		return 5
 	case "jsonrpc":
 		return 6
+	case "openviking":
+		return 7
 	default:
 		return 100
 	}
@@ -1194,6 +1196,8 @@ func promptProviderInstance(reader *bufio.Reader, writer io.Writer, cfg *config.
 		return promptMem0Provider(reader, writer, cfg, providerName)
 	case "memos", "memos-cloud":
 		return promptMemOSProvider(reader, writer, cfg, providerName)
+	case "openviking":
+		return promptOpenVikingProvider(reader, writer, cfg, providerName)
 	case "jsonrpc":
 		return promptJSONRPCProvider(reader, writer, cfg, providerName)
 	default:
@@ -1414,6 +1418,25 @@ func promptMemOSProvider(reader *bufio.Reader, writer io.Writer, cfg *config.Con
 	return promptProviderRouting(reader, writer, cfg, providerName, label)
 }
 
+func promptOpenVikingProvider(reader *bufio.Reader, writer io.Writer, cfg *config.Config, providerName string) error {
+	provider := cfg.Providers[providerName]
+	label := providerPromptLabel(providerName, provider)
+	var err error
+	provider.BaseURL, err = promptString(reader, writer, label+" base URL", firstNonEmpty(provider.BaseURL, config.DefaultOpenVikingBaseURL()))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(provider.BaseURL) == "" {
+		return errors.New("openviking setup requires a base URL")
+	}
+	provider.APIKey, err = promptString(reader, writer, label+" API key (blank for trusted local development)", provider.APIKey)
+	if err != nil {
+		return err
+	}
+	cfg.Providers[providerName] = provider
+	return promptProviderRouting(reader, writer, cfg, providerName, label)
+}
+
 func providerPromptLabel(providerName string, provider config.ProviderConfig) string {
 	switch provider.Type {
 	case "sqlite":
@@ -1446,6 +1469,11 @@ func providerPromptLabel(providerName string, provider config.ProviderConfig) st
 			return "MemOS Cloud"
 		}
 		return providerName + " (MemOS Cloud)"
+	case "openviking":
+		if providerName == "openviking" {
+			return "OpenViking"
+		}
+		return providerName + " (OpenViking)"
 	case "jsonrpc":
 		if providerName == "jsonrpc" {
 			return "JSON-RPC"

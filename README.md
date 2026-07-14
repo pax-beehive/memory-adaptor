@@ -10,7 +10,7 @@
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-6f42c1)](https://github.com/pax-beehive/paxm/releases/latest)
 
 Give Codex, Claude Code, OpenCode, Pi, and MCP clients one active and passive
-memory surface. Start with built-in SQLite, connect Zep, Mem0, or MemOS, or
+memory surface. Start with built-in SQLite, connect Zep, Mem0, MemOS, or OpenViking, or
 bring a private provider through JSON-RPC.
 
 [Install](#quick-start) · [SQLite quality](#sqlite-quality-preview) · [How it works](#how-it-works) · [Providers](#agents-and-providers) · [Docs](#documentation)
@@ -129,7 +129,7 @@ integrations. Use up/down to move, space to toggle, and enter to confirm.
 Selected agents are configured one at a time.
 
 Active recall skills remain user-installed. SQLite works without an API key;
-remote providers such as Zep, Mem0, and MemOS require connection details during
+remote providers such as Zep, Mem0, MemOS, and OpenViking require connection details during
 setup.
 
 SQLite health checks must be allowed to create WAL/SHM files beside the
@@ -199,6 +199,7 @@ Read the detailed [architecture](docs/architecture.md) and
 | Mem0 Cloud | Built in | Managed Platform API with async v3 writes/search |
 | MemOS | Built in | Self-hosted product API, scoped by memory cube |
 | MemOS Cloud | Built in | Managed OpenMem API with Token authentication |
+| OpenViking | Built in | Self-hosted session extraction and semantic memory search |
 | Custom JSON-RPC | Adapter | Bring an existing or private memory system |
 
 Enable multiple provider instances at once. Recall and write profiles control

@@ -210,6 +210,20 @@ func TestDefaultRegistryBuildsMemOSProviderTypes(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistryBuildsOpenVikingProvider(t *testing.T) {
+	t.Parallel()
+
+	provider, err := DefaultRegistry().BuildProvider("private", config.ProviderConfig{
+		Type: "openviking", BaseURL: "http://openviking.test", APIKey: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "private" {
+		t.Fatalf("name = %q, want private", provider.Name())
+	}
+}
+
 type captureProvider struct {
 	name string
 }
