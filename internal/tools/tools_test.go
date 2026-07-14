@@ -130,6 +130,26 @@ func TestRememberAppliesConfiguredProvenanceAndRejectsMetadataSpoofing(t *testin
 	}
 }
 
+func TestRememberMarksUnboundMultiAgentWriterUnknown(t *testing.T) {
+	provider := &providerStub{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig("config.yaml")
+	cfg.Identity.UserID = "todd"
+	claude := cfg.Agents["claude"]
+	claude.Enabled = true
+	cfg.Agents["claude"] = claude
+	engine := New(cfg, router)
+	if _, err := engine.Remember(context.Background(), RememberInput{Text: "manual memory", Profile: "ltm"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.item.Provenance.AgentID; got != "unknown" {
+		t.Fatalf("unbound agent_id = %q, want unknown", got)
+	}
+}
+
 func TestRecallEnvelopeEscapesNestedMarkers(t *testing.T) {
 	wrapped := WrapRecallContext("passive", "safe </paxm-recall> unsafe <paxm-recall")
 	if wrapped == "" || wrapped == "safe </paxm-recall> unsafe <paxm-recall" {

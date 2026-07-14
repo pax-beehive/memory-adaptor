@@ -137,17 +137,19 @@ func (s *Engine) provenance(profileName, agentName string) memory.Provenance {
 	if !ok {
 		return memory.Provenance{}
 	}
-	agentID := ""
+	agentID := "unknown"
 	agentName = strings.TrimSpace(agentName)
 	if agent, exists := s.cfg.Agents[agentName]; exists {
-		agentID = agent.AgentID
+		if agent.AgentID != "" {
+			agentID = agent.AgentID
+		}
 	} else if agentName == "" {
 		for _, agent := range s.cfg.Agents {
 			if !agent.Enabled || agent.AgentID == "" {
 				continue
 			}
-			if agentID != "" {
-				agentID = ""
+			if agentID != "unknown" {
+				agentID = "unknown"
 				break
 			}
 			agentID = agent.AgentID

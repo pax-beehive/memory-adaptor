@@ -187,6 +187,12 @@ func TestLongTermFingerprintIncludesScope(t *testing.T) {
 	}
 }
 
+func TestMissingProvenanceIsReportedAsUnknown(t *testing.T) {
+	if got := ProvenanceFromMetadata(nil); got.ScopeType != "unknown" || got.ScopeID != "" {
+		t.Fatalf("missing provenance = %#v", got)
+	}
+}
+
 func TestRouterClosesProviderResources(t *testing.T) {
 	provider := &closeProvider{fakeProvider: fakeProvider{name: "sqlite"}}
 	router, err := NewRouter([]ProviderBinding{{Provider: provider}})

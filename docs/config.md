@@ -611,7 +611,8 @@ internal behaviors and have no user-facing tuning knobs.
 Passive writes resolve it from the hook target. Start MCP with
 `paxm mcp serve --agent <name>` to attach the corresponding configured identity
 to explicit MCP writes. The MCP tool itself cannot supply an arbitrary user or
-agent ID.
+agent ID. A write with no bound integration and more than one enabled agent is
+recorded with `agent_id: unknown` rather than guessing an owner.
 
 `agents.<name>.active_recall` controls explicit recall calls made by that agent
 or by a skill running inside that agent. Setup preserves this field for

@@ -111,6 +111,24 @@ func TestServerServesMemoryToolsOverStdio(t *testing.T) {
 
 }
 
+func TestServerLabelsMissingScopeUnknown(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(configPath, config.DefaultConfig(configPath)); err != nil {
+		t.Fatal(err)
+	}
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"paxm_remember","arguments":{"text":"legacy scope marker"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"paxm_recall","arguments":{"query":"legacy scope marker"}}}`,
+	}, "\n") + "\n"
+	var stdout bytes.Buffer
+	if err := Serve(Options{ConfigPath: configPath, Stdin: strings.NewReader(input), Stdout: &stdout}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"scope_type":"unknown"`) {
+		t.Fatalf("structured recall omitted unknown scope: %s", stdout.String())
+	}
+}
+
 func TestRecallErrorToolResultMarksPartialHits(t *testing.T) {
 	t.Parallel()
 	result := recallErrorToolResult(errors.New("required provider failed"), facade.RecallResult{

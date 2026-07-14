@@ -35,10 +35,15 @@ func ApplyProvenance(item MemoryItem, provenance Provenance) MemoryItem {
 }
 
 func ProvenanceFromMetadata(metadata map[string]string) Provenance {
-	return Provenance{
+	provenance := Provenance{
 		UserID: strings.TrimSpace(metadata[MetadataUserID]), AgentID: strings.TrimSpace(metadata[MetadataAgentID]),
 		ScopeType: strings.TrimSpace(metadata[MetadataScopeType]), ScopeID: strings.TrimSpace(metadata[MetadataScopeID]),
 	}
+	if provenance.ScopeType == "" || provenance.ScopeID == "" {
+		provenance.ScopeType = "unknown"
+		provenance.ScopeID = ""
+	}
+	return provenance
 }
 
 func WithoutProvenanceMetadata(metadata map[string]string) map[string]string {
