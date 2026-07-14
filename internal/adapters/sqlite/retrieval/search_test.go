@@ -44,11 +44,11 @@ func TestSearchExtractsLongQueryFocusedRecallContext(t *testing.T) {
 	t.Parallel()
 	db := openTestDatabase(t)
 	lines := []string{"[9 June 2023]"}
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 90; i++ {
 		lines = append(lines, "Caroline: my current group of friends is supportive")
 	}
 	lines = append(lines, "Caroline: we have known each other for 4 years")
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 90; i++ {
 		lines = append(lines, "Caroline: my current group of friends is supportive")
 	}
 	original := strings.Join(lines, "\n")
@@ -73,7 +73,7 @@ func TestSearchExtractsLongUnspacedCJKRecallContext(t *testing.T) {
 	t.Parallel()
 	db := openTestDatabase(t)
 	target := "部署区域是美国西部二区"
-	original := strings.Repeat("背景资料", 300) + target + strings.Repeat("历史记录", 300)
+	original := strings.Repeat("背景资料", 400) + target + strings.Repeat("历史记录", 400)
 	insertTestMemory(t, db, "cjk", original, "test", `{}`, time.Now().UTC(), "ltm", "")
 
 	hits, err := Search(context.Background(), db, Request{Text: "部署区域", Limit: 5})

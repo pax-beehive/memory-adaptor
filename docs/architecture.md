@@ -101,8 +101,8 @@ When a query carries `metadata.workspace`, SQLite excludes rows owned by a
 different workspace in SQL before scoring; unscoped memories remain visible as
 shared memories for compatibility with the provider contract.
 
-SQLite also bounds long recall results inside this retrieval module. Memories
-shorter than 1,200 bytes are returned unchanged. For longer results, SQLite
+SQLite also bounds unusually long recall results inside this retrieval module.
+Memories no larger than 8 KiB are returned unchanged. For longer results, SQLite
 selects query-bearing source segments plus adjacent context, preserves a
 session timestamp when present, and prioritizes explicit date or duration
 evidence for temporal questions. The selected text is extractive: it never
@@ -111,9 +111,12 @@ model. Internal defaults allocate excerpt-eligible long hits from an 8,000-byte
 top-K target, with at most 2,400 bytes assigned to one hit. Short hits and long
 hits without usable lexical evidence remain unchanged, so this is a
 best-effort context target rather than a hard response-size limit for arbitrary
-caller-supplied top-K values. These are SQLite implementation defaults rather
-than public recall-profile settings; other providers are not processed by this
-path. Excerpted hits retain their ID, source, scores, and ordering and add
+caller-supplied top-K values. A long hit also remains unchanged unless the
+original and selected excerpt both cover every significant query term; this
+fail-open quality gate favors recall evidence over context reduction. These are
+SQLite implementation defaults rather than public recall-profile settings;
+other providers are not processed by this path. Excerpted hits retain their ID,
+source, scores, and ordering and add
 `sqlite_excerpted` plus `sqlite_original_bytes` metadata for diagnosis.
 
 ## Recall Profiles

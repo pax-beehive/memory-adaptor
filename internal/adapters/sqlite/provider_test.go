@@ -80,7 +80,7 @@ func TestProviderSearchExtractsRelevantContextFromLongSQLiteMemory(t *testing.T)
 	t.Cleanup(func() { _ = provider.Close() })
 
 	lines := make([]string, 0, 64)
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 70; i++ {
 		lines = append(lines, "Morgan: unrelated planning notes that should not consume recall context")
 	}
 	lines = append(lines,
@@ -88,7 +88,7 @@ func TestProviderSearchExtractsRelevantContextFromLongSQLiteMemory(t *testing.T)
 		"Morgan: the atlas deployment region is us-west-2",
 		"Riley: keep the rollback in us-east-1",
 	)
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 70; i++ {
 		lines = append(lines, "Morgan: unrelated retrospective notes that should not consume recall context")
 	}
 	original := strings.Join(lines, "\n")
@@ -175,9 +175,9 @@ func TestProviderSearchExtractsEvidenceFromLongSingleLineMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = provider.Close() })
-	prefix := strings.Repeat("Old planning detail without a final location. ", 40)
+	prefix := strings.Repeat("Old planning detail without a final location. ", 100)
 	target := "The atlas deployment region is us-west-2. "
-	suffix := strings.Repeat("Unrelated retrospective detail after the decision. ", 40)
+	suffix := strings.Repeat("Unrelated retrospective detail after the decision. ", 100)
 	original := "Morgan: " + prefix + target + suffix
 	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: original}); err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestProviderSearchExtractsEvidenceFromLongUnspacedCJKMemory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = provider.Close() })
 	target := "部署区域是美国西部二区"
-	original := strings.Repeat("背景资料", 300) + target + strings.Repeat("历史记录", 300)
+	original := strings.Repeat("背景资料", 400) + target + strings.Repeat("历史记录", 400)
 	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: original}); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestProviderSearchKeepsBestEvidenceUnderExcerptBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = provider.Close() })
-	longFiller := strings.Repeat(" background", 100)
+	longFiller := strings.Repeat(" background", 300)
 	original := strings.Join([]string{
 		"Morgan: atlas" + longFiller,
 		"Riley: context before the first partial match" + longFiller,
@@ -260,8 +260,8 @@ func TestProviderSearchBoundsCombinedLongSQLiteContext(t *testing.T) {
 	t.Cleanup(func() { _ = provider.Close() })
 	for i := 0; i < 5; i++ {
 		text := strings.Join([]string{
-			fmt.Sprintf("Morgan: atlas deployment region %d is us-west-2 %s", i, strings.Repeat("supporting detail ", 100)),
-			"Riley: " + strings.Repeat("unrelated historical context ", 100),
+			fmt.Sprintf("Morgan: atlas deployment region %d is us-west-2 %s", i, strings.Repeat("supporting detail ", 200)),
+			"Riley: " + strings.Repeat("unrelated historical context ", 200),
 		}, "\n")
 		if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: text}); err != nil {
 			t.Fatal(err)
@@ -295,12 +295,12 @@ func TestProviderSearchExcerptIgnoresQuestionStopWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = provider.Close() })
-	lines := make([]string, 0, 62)
-	for i := 0; i < 30; i++ {
+	lines := make([]string, 0, 142)
+	for i := 0; i < 70; i++ {
 		lines = append(lines, "Caroline: I did give support at a community gathering with friends")
 	}
 	lines = append(lines, "Caroline: My school event was last week")
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 70; i++ {
 		lines = append(lines, "Caroline: I did give support at a community gathering with friends")
 	}
 	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: strings.Join(lines, "\n")}); err != nil {
@@ -325,7 +325,7 @@ func TestProviderSearchExcerptKeepsSessionTimestamp(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = provider.Close() })
 	lines := []string{"[9 June 2023]"}
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 150; i++ {
 		lines = append(lines, "Caroline: unrelated details about the community gathering")
 	}
 	lines = append(lines, "Caroline: I talked at the school event last week")
@@ -350,12 +350,12 @@ func TestProviderSearchExcerptPrioritizesTemporalEvidenceForDurationQuestion(t *
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = provider.Close() })
-	lines := make([]string, 0, 62)
-	for i := 0; i < 30; i++ {
+	lines := make([]string, 0, 182)
+	for i := 0; i < 90; i++ {
 		lines = append(lines, "Caroline: my current group of friends is supportive")
 	}
 	lines = append(lines, "Caroline: we have known each other for 4 years")
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 90; i++ {
 		lines = append(lines, "Caroline: my current group of friends is supportive")
 	}
 	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: strings.Join(lines, "\n")}); err != nil {
@@ -368,6 +368,65 @@ func TestProviderSearchExcerptPrioritizesTemporalEvidenceForDurationQuestion(t *
 	}
 	if len(hits) != 1 || !strings.Contains(hits[0].Text, "4 years") {
 		t.Fatalf("duration evidence was displaced by lexical distractors:\n%#v", hits)
+	}
+}
+
+func TestProviderSearchLeavesPartialLexicalHitUnchanged(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close() })
+	lines := make([]string, 0, 142)
+	for i := 0; i < 70; i++ {
+		lines = append(lines, "Caroline: unrelated background about friends and community support")
+	}
+	lines = append(lines, "Caroline: I am single")
+	for i := 0; i < 70; i++ {
+		lines = append(lines, "Caroline: unrelated background about friends and community support")
+	}
+	original := strings.Join(lines, "\n")
+	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: original}); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{Text: "What is Caroline relationship status?", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Text != original {
+		t.Fatalf("partial lexical hit should fail open to the original text: %#v", hits)
+	}
+}
+
+func TestProviderSearchTemporalExcerptRequiresQueryOverlap(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close() })
+	lines := make([]string, 0, 242)
+	for i := 0; i < 120; i++ {
+		lines = append(lines, fmt.Sprintf("Morgan: unrelated budget number %d", 2020+i))
+	}
+	lines = append(lines, "Morgan: atlas deployment was finalized after approval")
+	for i := 0; i < 120; i++ {
+		lines = append(lines, fmt.Sprintf("Morgan: unrelated budget number %d", 2050+i))
+	}
+	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: strings.Join(lines, "\n")}); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{Text: "When was atlas deployment finalized?", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || !strings.Contains(hits[0].Text, "atlas deployment was finalized") {
+		t.Fatalf("unrelated temporal segments displaced query evidence: %#v", hits)
 	}
 }
 

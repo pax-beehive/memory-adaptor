@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	minExcerptBytes        = 1200
+	minExcerptBytes        = 8192
 	maxExcerptBytes        = 8000
 	maxExcerptBytesPerHit  = 2400
 	maxExcerptSegmentBytes = 800
@@ -37,8 +37,14 @@ func excerptHits(query string, hits []Hit) []Hit {
 		if len(hits[i].Text) < minExcerptBytes {
 			continue
 		}
+		if excerptMatchedTermCount(queryTerms, hits[i].Text) < len(queryTerms) {
+			continue
+		}
 		excerpt := excerptText(query, queryTerms, hits[i].Text, budget)
 		if excerpt == "" || excerpt == hits[i].Text {
+			continue
+		}
+		if excerptMatchedTermCount(queryTerms, excerpt) < len(queryTerms) {
 			continue
 		}
 		originalBytes := len(hits[i].Text)
@@ -64,7 +70,7 @@ func excerptQueryTerms(query string) []string {
 
 func excerptStopWord(term string) bool {
 	switch term {
-	case "a", "an", "and", "are", "as", "at", "be", "been", "did", "do", "does", "for", "from", "had", "has", "have", "how", "in", "is", "it", "of", "on", "or", "the", "to", "was", "were", "what", "when", "where", "which", "who", "why", "will", "with", "would":
+	case "a", "an", "and", "are", "as", "at", "be", "been", "did", "do", "does", "for", "from", "had", "has", "have", "her", "his", "how", "in", "is", "it", "its", "long", "many", "my", "of", "on", "or", "our", "the", "their", "to", "was", "were", "what", "when", "where", "which", "who", "why", "will", "with", "would", "your":
 		return true
 	default:
 		return false
@@ -113,10 +119,10 @@ func scoreExcerptSegments(query string, queryTerms, segments []string, headerInd
 			continue
 		}
 		matched := excerptMatchedTermCount(queryTerms, segment)
-		temporal := wantsTemporalEvidence && excerptHasTemporalEvidence(segment)
-		if matched == 0 && !temporal {
+		if matched == 0 {
 			continue
 		}
+		temporal := wantsTemporalEvidence && excerptHasTemporalEvidence(segment)
 		scored = append(scored, scoredSegment{
 			index: i, matched: matched, phrase: excerptContainsPhrase(query, queryTerms, segment),
 			temporal: temporal, density: excerptEvidenceDensity(matched, segment),
