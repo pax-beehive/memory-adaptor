@@ -146,6 +146,29 @@ func TestProviderSearchLeavesShortSQLiteMemoryUnchanged(t *testing.T) {
 	}
 }
 
+func TestProviderSearchLeavesExactEightKiBMemoryUnchanged(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New("sqlite", filepath.Join(t.TempDir(), "memory.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close() })
+	seed := strings.Repeat("atlas deployment region supporting detail\n", 256)
+	original := seed[:8192]
+	if _, err := provider.Put(context.Background(), memory.MemoryItem{Text: original}); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := provider.Search(context.Background(), memory.SearchQuery{Text: "atlas deployment region", Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Text != original {
+		t.Fatalf("exact 8 KiB SQLite memory changed: %#v", hits)
+	}
+}
+
 func TestProviderSearchReturnsNoHitsWithoutExcerptPanic(t *testing.T) {
 	t.Parallel()
 

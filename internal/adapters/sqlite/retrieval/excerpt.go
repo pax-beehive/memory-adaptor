@@ -34,7 +34,7 @@ func excerptHits(query string, hits []Hit) []Hit {
 	}
 	budget := min(maxExcerptBytesPerHit, maxExcerptBytes/len(hits))
 	for i := range hits {
-		if len(hits[i].Text) < minExcerptBytes {
+		if len(hits[i].Text) <= minExcerptBytes {
 			continue
 		}
 		if excerptMatchedTermCount(queryTerms, hits[i].Text) < len(queryTerms) {
