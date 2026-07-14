@@ -21,6 +21,7 @@ const (
 	defaultMem0CloudBaseURL    = "https://api.mem0.ai"
 	defaultMemOSBaseURL        = "http://localhost:8000"
 	defaultMemOSCloudBaseURL   = "https://memos.memtensor.cn/api/openmem/v1"
+	defaultOpenVikingBaseURL   = "http://localhost:1933"
 	defaultJSONRPCTransport    = "stdio"
 	defaultJSONRPCTimeout      = "30s"
 	defaultProviderRouteWeight = 1
@@ -331,6 +332,11 @@ func DefaultConfig(configPath string) Config {
 				Type:    "memos-cloud",
 				Enabled: false,
 				BaseURL: defaultMemOSCloudBaseURL,
+			},
+			"openviking": {
+				Type:    "openviking",
+				Enabled: false,
+				BaseURL: defaultOpenVikingBaseURL,
 			},
 			"jsonrpc": {
 				Type:      "jsonrpc",
@@ -1099,6 +1105,8 @@ func DefaultMem0CloudBaseURL() string {
 func DefaultMemOSBaseURL() string { return defaultMemOSBaseURL }
 
 func DefaultMemOSCloudBaseURL() string { return defaultMemOSCloudBaseURL }
+
+func DefaultOpenVikingBaseURL() string { return defaultOpenVikingBaseURL }
 
 func DefaultProviderRecallTimeout(providerType string) string {
 	if isManagedCloudProvider(providerType) {

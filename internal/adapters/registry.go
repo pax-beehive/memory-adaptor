@@ -8,6 +8,7 @@ import (
 	mem0adapter "github.com/pax-beehive/paxm/internal/adapters/mem0"
 	mem0cloudadapter "github.com/pax-beehive/paxm/internal/adapters/mem0cloud"
 	memosadapter "github.com/pax-beehive/paxm/internal/adapters/memos"
+	openvikingadapter "github.com/pax-beehive/paxm/internal/adapters/openviking"
 	sqliteadapter "github.com/pax-beehive/paxm/internal/adapters/sqlite"
 	zepadapter "github.com/pax-beehive/paxm/internal/adapters/zep"
 	"github.com/pax-beehive/paxm/internal/config"
@@ -39,6 +40,9 @@ func DefaultRegistry() Registry {
 	})
 	registry.Register("memos-cloud", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
 		return memosadapter.NewCloud(name, cfg)
+	})
+	registry.Register("openviking", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
+		return openvikingadapter.New(name, cfg)
 	})
 	registry.Register("jsonrpc", func(name string, cfg config.ProviderConfig) (memory.Provider, error) {
 		return jsonrpcadapter.New(name, cfg)

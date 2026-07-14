@@ -72,6 +72,9 @@ Current provider adapters:
 - `memos-cloud`: managed MemOS OpenMem API storage. Its separate dialect owns
   Token auth and `/add/message` plus `/search/memory`; provider details do not
   escape into the router, facade, CLI, MCP, or agent integrations.
+- `openviking`: self-hosted OpenViking HTTP storage. The adapter owns
+  session/message/commit writes, asynchronous extraction receipts,
+  `X-API-Key` authentication, and memory-only `/search/find` mapping.
 - `jsonrpc`: custom stdio plugin storage. The plugin implements the provider
   contract with JSON-RPC 2.0 methods while paxm keeps routing, thresholds, and
   ranking in core.
