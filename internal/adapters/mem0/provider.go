@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pax-beehive/paxm/internal/adapters/scoresemantics"
@@ -28,15 +29,18 @@ type httpDoer interface {
 }
 
 type Provider struct {
-	name           string
-	baseURL        string
-	apiKey         string
-	userID         string
-	agentID        string
-	runID          string
-	infer          *bool
-	scoreSemantics config.ScoreSemantics
-	client         httpDoer
+	name                 string
+	baseURL              string
+	apiKey               string
+	userID               string
+	agentID              string
+	runID                string
+	infer                *bool
+	scoreSemantics       config.ScoreSemantics
+	searchScopePayload   config.Mem0SearchScopePayload
+	searchScopeMu        sync.RWMutex
+	detectedScopePayload config.Mem0SearchScopePayload
+	client               httpDoer
 }
 
 type message struct {
@@ -55,8 +59,22 @@ type addRequest struct {
 
 type searchRequest struct {
 	Query   string         `json:"query"`
+	UserID  string         `json:"user_id,omitempty"`
+	AgentID string         `json:"agent_id,omitempty"`
+	RunID   string         `json:"run_id,omitempty"`
 	Filters map[string]any `json:"filters,omitempty"`
 	TopK    *int           `json:"top_k,omitempty"`
+}
+
+type httpStatusError struct {
+	statusCode int
+	method     string
+	path       string
+	detail     string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("mem0 %s %s: %s", e.method, e.path, e.detail)
 }
 
 func New(name string, cfg config.ProviderConfig) (*Provider, error) {
@@ -85,16 +103,21 @@ func newWithClient(name string, cfg config.ProviderConfig, client httpDoer) (*Pr
 	if err != nil {
 		return nil, fmt.Errorf("mem0 provider: %w", err)
 	}
+	searchScopePayload, err := config.ParseMem0SearchScopePayload(cfg.SearchScopePayload)
+	if err != nil {
+		return nil, fmt.Errorf("mem0 provider: %w", err)
+	}
 	return &Provider{
-		name:           name,
-		baseURL:        baseURL,
-		apiKey:         strings.TrimSpace(cfg.APIKey),
-		userID:         userID,
-		agentID:        agentID,
-		runID:          runID,
-		infer:          cfg.Infer,
-		scoreSemantics: scoreSemantics,
-		client:         client,
+		name:               name,
+		baseURL:            baseURL,
+		apiKey:             strings.TrimSpace(cfg.APIKey),
+		userID:             userID,
+		agentID:            agentID,
+		runID:              runID,
+		infer:              cfg.Infer,
+		scoreSemantics:     scoreSemantics,
+		searchScopePayload: searchScopePayload,
+		client:             client,
 	}, nil
 }
 
@@ -110,16 +133,17 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 	if text == "" {
 		return nil, errors.New("mem0 search query is required")
 	}
-	request := searchRequest{
-		Query:   text,
-		Filters: p.searchFilters(query),
+	payload := p.effectiveSearchScopePayload()
+	response, err := p.search(ctx, query, text, payload)
+	if err != nil && p.searchScopePayload == config.Mem0SearchScopePayloadAuto && payload == config.Mem0SearchScopePayloadFilters && isSearchScopePayloadCompatibilityError(err) {
+		response, err = p.search(ctx, query, text, config.Mem0SearchScopePayloadTopLevel)
+		if err == nil {
+			p.rememberSearchScopePayload(config.Mem0SearchScopePayloadTopLevel)
+		}
+	} else if err == nil && p.searchScopePayload == config.Mem0SearchScopePayloadAuto {
+		p.rememberSearchScopePayload(payload)
 	}
-	if query.Limit > 0 {
-		request.TopK = intPtr(clampInt(query.Limit, 1, 100))
-	}
-
-	var response any
-	if err := p.doJSON(ctx, http.MethodPost, "/search", request, &response); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	hits := hitsFromResponse(response, p.scoreSemantics)
@@ -128,6 +152,63 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 		hits[i] = memory.ApplyHitAttribution(hits[i])
 	}
 	return hits, nil
+}
+
+func (p *Provider) search(ctx context.Context, query memory.SearchQuery, text string, payload config.Mem0SearchScopePayload) (any, error) {
+	request := p.newSearchRequest(query, text, payload)
+	var response any
+	if err := p.doJSON(ctx, http.MethodPost, "/search", request, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (p *Provider) newSearchRequest(query memory.SearchQuery, text string, payload config.Mem0SearchScopePayload) searchRequest {
+	request := searchRequest{Query: text}
+	if query.Limit > 0 {
+		request.TopK = intPtr(clampInt(query.Limit, 1, 100))
+	}
+	if payload == config.Mem0SearchScopePayloadTopLevel {
+		request.UserID = p.userID
+		request.AgentID = p.agentID
+		request.RunID = p.runID
+		request.Filters = p.searchMetadataFilters(query)
+		return request
+	}
+	request.Filters = p.searchFilters(query)
+	return request
+}
+
+func (p *Provider) effectiveSearchScopePayload() config.Mem0SearchScopePayload {
+	if p.searchScopePayload != config.Mem0SearchScopePayloadAuto {
+		return p.searchScopePayload
+	}
+	p.searchScopeMu.RLock()
+	detected := p.detectedScopePayload
+	p.searchScopeMu.RUnlock()
+	if detected != "" {
+		return detected
+	}
+	return config.Mem0SearchScopePayloadFilters
+}
+
+func (p *Provider) rememberSearchScopePayload(payload config.Mem0SearchScopePayload) {
+	p.searchScopeMu.Lock()
+	p.detectedScopePayload = payload
+	p.searchScopeMu.Unlock()
+}
+
+func isSearchScopePayloadCompatibilityError(err error) bool {
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) || statusErr.method != http.MethodPost || statusErr.path != "/search" {
+		return false
+	}
+	if statusErr.statusCode != http.StatusBadRequest && statusErr.statusCode != http.StatusUnprocessableEntity && statusErr.statusCode != http.StatusInternalServerError {
+		return false
+	}
+	detail := strings.ToLower(strings.TrimSpace(statusErr.detail))
+	missingScope := strings.Contains(detail, "at least one of 'user_id', 'agent_id', or 'run_id'")
+	return missingScope && (strings.Contains(detail, "must be provided") || strings.Contains(detail, "must be specified"))
 }
 
 func (p *Provider) Put(ctx context.Context, item memory.MemoryItem) (memory.MemoryRef, error) {
@@ -215,6 +296,20 @@ func (p *Provider) putOne(ctx context.Context, item memory.MemoryItem) ([]memory
 }
 
 func (p *Provider) searchFilters(query memory.SearchQuery) map[string]any {
+	filters := p.searchMetadataFilters(query)
+	if filters == nil {
+		filters = make(map[string]any)
+	}
+	addNonEmpty(filters, "user_id", p.userID)
+	addNonEmpty(filters, "agent_id", p.agentID)
+	addNonEmpty(filters, "run_id", p.runID)
+	if len(filters) == 0 {
+		return nil
+	}
+	return filters
+}
+
+func (p *Provider) searchMetadataFilters(query memory.SearchQuery) map[string]any {
 	filters := make(map[string]any)
 	for _, key := range sortedKeys(query.Metadata) {
 		if isReservedFilterKey(key) {
@@ -227,9 +322,6 @@ func (p *Provider) searchFilters(query memory.SearchQuery) map[string]any {
 	if tiers := memory.NormalizeTiers(query.Tiers); len(tiers) == 1 {
 		filters["paxm_tier"] = string(tiers[0])
 	}
-	addNonEmpty(filters, "user_id", p.userID)
-	addNonEmpty(filters, "agent_id", p.agentID)
-	addNonEmpty(filters, "run_id", p.runID)
 	if len(filters) == 0 {
 		return nil
 	}
@@ -295,7 +387,15 @@ func (p *Provider) statusError(response *http.Response) error {
 			}
 		}
 	}
-	return fmt.Errorf("mem0 %s %s: %s", response.Request.Method, response.Request.URL.Path, detail)
+	method := "request"
+	path := "unknown"
+	if response.Request != nil {
+		method = response.Request.Method
+		if response.Request.URL != nil {
+			path = response.Request.URL.Path
+		}
+	}
+	return &httpStatusError{statusCode: response.StatusCode, method: method, path: path, detail: detail}
 }
 
 func refsFromResponse(provider string, value any) []memory.MemoryRef {

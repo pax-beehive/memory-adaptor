@@ -193,6 +193,36 @@ paxm 会在阈值、排序和 hook 注入之前把 distance 转换为
 `raw_score_kinds`、`candidate_count` 和 `eligible_count`，用于区分分数方向
 错误与阈值过滤，不新增公共命令。
 
+### Mem0 搜索 scope payload
+
+不同 self-hosted Mem0 版本对 `/search` 中 `user_id`、`agent_id`、`run_id`
+的位置要求不一致。`search_scope_payload` 支持：
+
+- `auto`：默认值。先放入 nested `filters`；只有服务端明确返回缺少 scope 的
+  兼容性错误时，才用顶层字段重试一次，并缓存成功形态。
+- `filters`：只发送 nested filters，适合严格的新式部署。
+- `top_level`：只把 entity scope 放在请求顶层；其他 metadata filter 仍放在
+  `filters`。
+
+Mem0 0.1.117 的 OpenAPI schema 虽然包含 `filters`，其运行时仍要求至少一个
+顶层 entity ID，因此不能只根据 OpenAPI 字段是否存在自动判断。team-memory
+当前固定的 0.1.117 eval 镜像推荐显式配置：
+
+```yaml
+providers:
+  memory:
+    type: mem0
+    enabled: true
+    base_url: http://mem0:8000
+    user_id: eval-user
+    run_id: finance-r6
+    score_semantics: distance
+    search_scope_payload: top_level
+```
+
+认证失败、超时、embedding/vector store 错误或其他普通 4xx/5xx 不会触发
+fallback，也不会被吞掉。
+
 ## 6. 可靠性和排障
 
 - 被动写入先进入本地 durable queue，再交给 provider；provider 慢或暂时不可用

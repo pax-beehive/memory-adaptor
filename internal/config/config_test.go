@@ -107,7 +107,7 @@ func TestDefaultConfigUsesConservativePassiveRecall(t *testing.T) {
 	if provider := cfg.Providers["sqlite"]; provider.Type != "sqlite" || !strings.HasSuffix(provider.Path, "memory.sqlite") {
 		t.Fatalf("default sqlite provider is invalid: %#v", provider)
 	}
-	if provider := cfg.Providers["mem0"]; provider.Type != "mem0" || provider.Enabled || provider.BaseURL != "http://localhost:8888" || provider.ScoreSemantics != string(ScoreSemanticsSimilarity) {
+	if provider := cfg.Providers["mem0"]; provider.Type != "mem0" || provider.Enabled || provider.BaseURL != "http://localhost:8888" || provider.ScoreSemantics != string(ScoreSemanticsSimilarity) || provider.SearchScopePayload != string(Mem0SearchScopePayloadAuto) {
 		t.Fatalf("default mem0 provider is invalid: %#v", provider)
 	}
 	if provider := cfg.Providers["mem0_cloud"]; provider.ScoreSemantics != string(ScoreSemanticsSimilarity) {
@@ -245,6 +245,46 @@ func TestScoreSemanticsConfigTable(t *testing.T) {
 			got := Normalize(cfg).Providers["memory"].ScoreSemantics
 			if got != string(tt.want) {
 				t.Fatalf("normalized score_semantics = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMem0SearchScopePayloadConfigTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		provider   string
+		configured string
+		want       Mem0SearchScopePayload
+		wantErr    string
+	}{
+		{name: "default auto", provider: "mem0", want: Mem0SearchScopePayloadAuto},
+		{name: "explicit filters", provider: "mem0", configured: " Filters ", want: Mem0SearchScopePayloadFilters},
+		{name: "explicit top level", provider: "mem0", configured: "top_level", want: Mem0SearchScopePayloadTopLevel},
+		{name: "invalid self hosted value", provider: "mem0", configured: "both", wantErr: "search_scope_payload must be auto, filters, or top_level"},
+		{name: "cloud ignores self hosted setting", provider: "mem0-cloud", configured: "platform-v3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Providers: map[string]ProviderConfig{
+				"memory": {Type: tt.provider, SearchScopePayload: tt.configured},
+			}}
+			if err := Validate(cfg); tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			got := Normalize(cfg).Providers["memory"].SearchScopePayload
+			if tt.provider == "mem0" && got != string(tt.want) {
+				t.Fatalf("normalized search_scope_payload = %q, want %q", got, tt.want)
+			}
+			if tt.provider != "mem0" && got != tt.configured {
+				t.Fatalf("non-Mem0 search_scope_payload changed to %q", got)
 			}
 		})
 	}

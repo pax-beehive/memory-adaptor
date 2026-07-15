@@ -67,9 +67,10 @@ func TestNewValidatesMem0Config(t *testing.T) {
 	t.Parallel()
 
 	for name, tc := range map[string]config.ProviderConfig{
-		"missing target":      {BaseURL: "http://localhost:8888"},
-		"bad base url":        {BaseURL: "localhost:8888", UserID: "user-1"},
-		"bad score semantics": {BaseURL: "http://localhost:8888", UserID: "user-1", ScoreSemantics: "cosine"},
+		"missing target":           {BaseURL: "http://localhost:8888"},
+		"bad base url":             {BaseURL: "localhost:8888", UserID: "user-1"},
+		"bad score semantics":      {BaseURL: "http://localhost:8888", UserID: "user-1", ScoreSemantics: "cosine"},
+		"bad search scope payload": {BaseURL: "http://localhost:8888", UserID: "user-1", SearchScopePayload: "both"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -219,6 +220,161 @@ func TestSearchMapsMem0Results(t *testing.T) {
 	}
 	if hit.Origin != (memory.MemoryOrigin{UserID: "todd", AgentID: "codex", SessionID: "session-7", TurnID: "turn-42"}) || hit.Scope != (memory.MemoryScope{Type: "team", ID: "pax"}) {
 		t.Fatalf("attribution was not restored: %#v", hit)
+	}
+}
+
+func TestSearchScopePayloadCompatibilityTable(t *testing.T) {
+	t.Parallel()
+
+	type scriptedResponse struct {
+		status int
+		body   string
+	}
+	missingProvided := `{"detail":"At least one of 'user_id', 'agent_id', or 'run_id' must be provided."}`
+	missingSpecified := `{"detail":"At least one of 'user_id', 'agent_id', or 'run_id' must be specified."}`
+	success := `{"results":[{"id":"mem-1","memory":"regulatory scope","score":0.91}]}`
+	tests := []struct {
+		name         string
+		configured   string
+		responses    []scriptedResponse
+		searches     int
+		wantPayloads []config.Mem0SearchScopePayload
+		wantErr      string
+	}{
+		{
+			name:         "explicit filters",
+			configured:   "filters",
+			responses:    []scriptedResponse{{status: http.StatusOK, body: success}},
+			searches:     1,
+			wantPayloads: []config.Mem0SearchScopePayload{config.Mem0SearchScopePayloadFilters},
+		},
+		{
+			name:         "explicit top level",
+			configured:   "top_level",
+			responses:    []scriptedResponse{{status: http.StatusOK, body: success}},
+			searches:     1,
+			wantPayloads: []config.Mem0SearchScopePayload{config.Mem0SearchScopePayloadTopLevel},
+		},
+		{
+			name:         "auto keeps nested filters when accepted",
+			responses:    []scriptedResponse{{status: http.StatusOK, body: success}, {status: http.StatusOK, body: success}},
+			searches:     2,
+			wantPayloads: []config.Mem0SearchScopePayload{config.Mem0SearchScopePayloadFilters, config.Mem0SearchScopePayloadFilters},
+		},
+		{
+			name: "auto falls back on v0.1.117 missing scope and caches top level",
+			responses: []scriptedResponse{
+				{status: http.StatusInternalServerError, body: missingProvided},
+				{status: http.StatusOK, body: success},
+				{status: http.StatusOK, body: success},
+			},
+			searches: 2,
+			wantPayloads: []config.Mem0SearchScopePayload{
+				config.Mem0SearchScopePayloadFilters,
+				config.Mem0SearchScopePayloadTopLevel,
+				config.Mem0SearchScopePayloadTopLevel,
+			},
+		},
+		{
+			name: "auto falls back on explicit bad request scope error",
+			responses: []scriptedResponse{
+				{status: http.StatusBadRequest, body: missingSpecified},
+				{status: http.StatusOK, body: success},
+			},
+			searches:     1,
+			wantPayloads: []config.Mem0SearchScopePayload{config.Mem0SearchScopePayloadFilters, config.Mem0SearchScopePayloadTopLevel},
+		},
+		{
+			name:         "non compatibility error is not retried",
+			responses:    []scriptedResponse{{status: http.StatusInternalServerError, body: `{"detail":"embedding provider unavailable"}`}},
+			searches:     1,
+			wantPayloads: []config.Mem0SearchScopePayload{config.Mem0SearchScopePayloadFilters},
+			wantErr:      "embedding provider unavailable",
+		},
+		{
+			name: "fallback error is returned",
+			responses: []scriptedResponse{
+				{status: http.StatusInternalServerError, body: missingProvided},
+				{status: http.StatusBadGateway, body: `{"detail":"vector store unavailable"}`},
+			},
+			searches:     1,
+			wantPayloads: []config.Mem0SearchScopePayload{config.Mem0SearchScopePayloadFilters, config.Mem0SearchScopePayloadTopLevel},
+			wantErr:      "vector store unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured []searchRequest
+			client := httpDoerFunc(func(request *http.Request) (*http.Response, error) {
+				var body searchRequest
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatalf("decode search request: %v", err)
+				}
+				captured = append(captured, body)
+				index := len(captured) - 1
+				if index >= len(tt.responses) {
+					t.Fatalf("unexpected search request %d: %#v", index+1, body)
+				}
+				response := tt.responses[index]
+				return &http.Response{
+					StatusCode: response.status,
+					Status:     http.StatusText(response.status),
+					Body:       io.NopCloser(strings.NewReader(response.body)),
+					Request:    request,
+				}, nil
+			})
+			provider, err := newWithClient("mem0", config.ProviderConfig{
+				BaseURL: "http://mem0.test", UserID: "eval-user", AgentID: "consumer", RunID: "eval-run",
+				SearchScopePayload: tt.configured,
+			}, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range tt.searches {
+				_, err = provider.Search(context.Background(), memory.SearchQuery{
+					Text: "scope", Limit: 3, Tiers: []memory.MemoryTier{memory.TierLTM}, Metadata: map[string]string{"workspace": "/tmp/team-memory"},
+				})
+				if err != nil {
+					break
+				}
+			}
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Search() error = %v, want %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if len(captured) != len(tt.wantPayloads) {
+				t.Fatalf("captured requests = %#v, want payloads %v", captured, tt.wantPayloads)
+			}
+			for index, want := range tt.wantPayloads {
+				assertSearchScopePayload(t, captured[index], want)
+			}
+		})
+	}
+}
+
+func assertSearchScopePayload(t *testing.T, request searchRequest, want config.Mem0SearchScopePayload) {
+	t.Helper()
+	if request.Filters["workspace"] != "/tmp/team-memory" || request.Filters["paxm_tier"] != "ltm" {
+		t.Fatalf("search metadata filters were lost: %#v", request)
+	}
+	if want == config.Mem0SearchScopePayloadFilters {
+		if request.UserID != "" || request.AgentID != "" || request.RunID != "" {
+			t.Fatalf("nested request leaked top-level scope: %#v", request)
+		}
+		if request.Filters["user_id"] != "eval-user" || request.Filters["agent_id"] != "consumer" || request.Filters["run_id"] != "eval-run" {
+			t.Fatalf("nested request lost scope filters: %#v", request)
+		}
+		return
+	}
+	if request.UserID != "eval-user" || request.AgentID != "consumer" || request.RunID != "eval-run" {
+		t.Fatalf("top-level request lost scope: %#v", request)
+	}
+	if request.Filters["user_id"] != nil || request.Filters["agent_id"] != nil || request.Filters["run_id"] != nil {
+		t.Fatalf("top-level request duplicated scope in filters: %#v", request)
 	}
 }
 
