@@ -90,27 +90,28 @@ type CaptureQueueConfig struct {
 }
 
 type ProviderConfig struct {
-	Type              string            `json:"type" yaml:"type"`
-	Enabled           bool              `json:"enabled" yaml:"enabled"`
-	Path              string            `json:"path,omitempty" yaml:"path,omitempty"`
-	APIKey            string            `json:"api_key,omitempty" yaml:"api_key,omitempty"`
-	BaseURL           string            `json:"base_url,omitempty" yaml:"base_url,omitempty"`
-	Transport         string            `json:"transport,omitempty" yaml:"transport,omitempty"`
-	Command           string            `json:"command,omitempty" yaml:"command,omitempty"`
-	Args              []string          `json:"args,omitempty" yaml:"args,omitempty"`
-	Env               map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
-	Timeout           string            `json:"timeout,omitempty" yaml:"timeout,omitempty"`
-	UserID            string            `json:"user_id,omitempty" yaml:"user_id,omitempty"`
-	AgentID           string            `json:"agent_id,omitempty" yaml:"agent_id,omitempty"`
-	RunID             string            `json:"run_id,omitempty" yaml:"run_id,omitempty"`
-	ScoreSemantics    string            `json:"score_semantics,omitempty" yaml:"score_semantics,omitempty"`
-	GraphID           string            `json:"graph_id,omitempty" yaml:"graph_id,omitempty"`
-	MemCubeID         string            `json:"mem_cube_id,omitempty" yaml:"mem_cube_id,omitempty"`
-	SearchMode        string            `json:"search_mode,omitempty" yaml:"search_mode,omitempty"`
-	SearchScope       string            `json:"search_scope,omitempty" yaml:"search_scope,omitempty"`
-	MaxCharacters     int               `json:"max_characters,omitempty" yaml:"max_characters,omitempty"`
-	SourceDescription string            `json:"source_description,omitempty" yaml:"source_description,omitempty"`
-	Infer             *bool             `json:"infer,omitempty" yaml:"infer,omitempty"`
+	Type               string            `json:"type" yaml:"type"`
+	Enabled            bool              `json:"enabled" yaml:"enabled"`
+	Path               string            `json:"path,omitempty" yaml:"path,omitempty"`
+	APIKey             string            `json:"api_key,omitempty" yaml:"api_key,omitempty"`
+	BaseURL            string            `json:"base_url,omitempty" yaml:"base_url,omitempty"`
+	Transport          string            `json:"transport,omitempty" yaml:"transport,omitempty"`
+	Command            string            `json:"command,omitempty" yaml:"command,omitempty"`
+	Args               []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	Env                map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	Timeout            string            `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	UserID             string            `json:"user_id,omitempty" yaml:"user_id,omitempty"`
+	AgentID            string            `json:"agent_id,omitempty" yaml:"agent_id,omitempty"`
+	RunID              string            `json:"run_id,omitempty" yaml:"run_id,omitempty"`
+	ScoreSemantics     string            `json:"score_semantics,omitempty" yaml:"score_semantics,omitempty"`
+	SearchScopePayload string            `json:"search_scope_payload,omitempty" yaml:"search_scope_payload,omitempty"`
+	GraphID            string            `json:"graph_id,omitempty" yaml:"graph_id,omitempty"`
+	MemCubeID          string            `json:"mem_cube_id,omitempty" yaml:"mem_cube_id,omitempty"`
+	SearchMode         string            `json:"search_mode,omitempty" yaml:"search_mode,omitempty"`
+	SearchScope        string            `json:"search_scope,omitempty" yaml:"search_scope,omitempty"`
+	MaxCharacters      int               `json:"max_characters,omitempty" yaml:"max_characters,omitempty"`
+	SourceDescription  string            `json:"source_description,omitempty" yaml:"source_description,omitempty"`
+	Infer              *bool             `json:"infer,omitempty" yaml:"infer,omitempty"`
 
 	Read     *bool   `json:"read,omitempty" yaml:"read,omitempty"`
 	Write    *bool   `json:"write,omitempty" yaml:"write,omitempty"`
@@ -326,10 +327,11 @@ func DefaultConfig(configPath string) Config {
 				SearchScope: "episodes",
 			},
 			"mem0": {
-				Type:           "mem0",
-				Enabled:        false,
-				BaseURL:        defaultMem0BaseURL,
-				ScoreSemantics: string(ScoreSemanticsSimilarity),
+				Type:               "mem0",
+				Enabled:            false,
+				BaseURL:            defaultMem0BaseURL,
+				ScoreSemantics:     string(ScoreSemanticsSimilarity),
+				SearchScopePayload: string(Mem0SearchScopePayloadAuto),
 			},
 			"mem0_cloud": {
 				Type:           "mem0-cloud",
@@ -635,6 +637,9 @@ func Validate(cfg Config) error {
 	if err := validateProviderScoreSemantics(cfg.Providers); err != nil {
 		return err
 	}
+	if err := validateMem0SearchScopePayloads(cfg.Providers); err != nil {
+		return err
+	}
 	if err := validateIdentity(cfg.Identity, cfg.Agents); err != nil {
 		return err
 	}
@@ -651,6 +656,22 @@ func Validate(cfg Config) error {
 		return err
 	}
 	return validateWriteProfiles(cfg.WriteProfiles)
+}
+
+func validateMem0SearchScopePayloads(providers map[string]ProviderConfig) error {
+	for name, provider := range providers {
+		providerType := strings.ToLower(strings.TrimSpace(provider.Type))
+		if providerType == "" {
+			providerType = strings.ToLower(strings.TrimSpace(name))
+		}
+		if providerType != "mem0" {
+			continue
+		}
+		if _, err := ParseMem0SearchScopePayload(provider.SearchScopePayload); err != nil {
+			return fmt.Errorf("provider %q: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func validateProviderScoreSemantics(providers map[string]ProviderConfig) error {
@@ -1072,6 +1093,7 @@ func normalizeProviderConfig(provider ProviderConfig) ProviderConfig {
 		provider.BaseURL = defaultMem0CloudBaseURL
 	}
 	provider = normalizeMem0ScoreSemantics(provider)
+	provider = normalizeMem0SearchScopePayload(provider)
 	if provider.BaseURL == "" && provider.Type == "memos" {
 		provider.BaseURL = defaultMemOSBaseURL
 	}
@@ -1090,6 +1112,13 @@ func normalizeProviderConfig(provider ProviderConfig) ProviderConfig {
 	}
 	if provider.Timeout == "" && provider.Type == "jsonrpc" {
 		provider.Timeout = defaultJSONRPCTimeout
+	}
+	return provider
+}
+
+func normalizeMem0SearchScopePayload(provider ProviderConfig) ProviderConfig {
+	if provider.Type == "mem0" {
+		provider.SearchScopePayload = string(NormalizeMem0SearchScopePayload(provider.SearchScopePayload))
 	}
 	return provider
 }

@@ -53,6 +53,7 @@ providers:
     api_key: "plain-text-mem0-api-key"
     user_id: todd
     score_semantics: similarity
+    search_scope_payload: auto
 
   mem0_cloud:
     type: mem0-cloud
@@ -406,6 +407,8 @@ Fields:
   `similarity` (the backward-compatible default) when larger values are more
   relevant, or `distance` when the deployment returns pgvector cosine distance
   in the `[0,2]` range. Paxm cannot infer this from a response field name.
+- `search_scope_payload`: self-hosted Mem0 `/search` entity-ID placement:
+  `auto` (default), `filters`, or `top_level`. It does not apply to Mem0 Cloud.
 - `graph_id`: Zep named graph target.
 - `mem_cube_id`: required memory cube for self-hosted MemOS.
 - `search_mode`: self-hosted MemOS retrieval mode: `fast`, `fine`, or `mixture`.
@@ -431,6 +434,34 @@ deployments that intentionally run with auth disabled. The default
 distance, such as a pgvector `vector <=> query` search. Distance is converted to
 `1 - distance/2` before thresholds and ranking, while the raw value remains in
 `raw_score` and its kind is `mem0_distance`.
+
+Self-hosted Mem0 releases disagree about where `/search` receives entity scope.
+Some deployments require `user_id`, `agent_id`, and `run_id` inside `filters`;
+Mem0 0.1.117's REST schema accepts `filters`, but its runtime scope validation
+still requires at least one of those fields at the request top level. The
+default `search_scope_payload: auto` preserves nested-filter behavior first and
+retries once with top-level scope only for the recognized missing-scope error;
+after a successful fallback, that provider instance caches `top_level`. Other
+HTTP, authentication, validation, embedding, and vector-store errors are
+returned without compatibility retry. Use an explicit mode when the deployment
+contract is known:
+
+```yaml
+providers:
+  mem0_eval:
+    type: mem0
+    enabled: true
+    base_url: http://mem0:8000
+    user_id: eval-user
+    run_id: finance-r6
+    score_semantics: distance
+    search_scope_payload: top_level # Mem0 0.1.117-style REST server
+```
+
+Use `search_scope_payload: filters` for a server that rejects top-level entity
+IDs. OpenAPI field presence alone is not sufficient capability detection:
+Mem0 0.1.117 advertises both shapes while rejecting filters-only scope at
+runtime.
 
 Mem0 Cloud uses the separate `mem0-cloud` type. It defaults to
 `https://api.mem0.ai`, requires `api_key`, authenticates with `Authorization:

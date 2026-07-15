@@ -265,6 +265,12 @@ Mem0 score direction is deployment-specific. `score_semantics` defaults to
 endpoint returns pgvector cosine distance. Paxm cannot infer this from a field
 named `score` or `similarity`.
 
+Self-hosted Mem0 search scope placement is also version-dependent.
+`search_scope_payload: auto` sends `user_id`, `agent_id`, and `run_id` inside
+`filters` first, then retries once with top-level fields only when the server
+returns a recognized missing-scope compatibility error. Set `top_level` for
+Mem0 0.1.117-style servers or `filters` for strict nested-filter deployments.
+
 ### Self-hosted OpenViking
 
 OpenViking support connects paxm to a user-operated OpenViking server. Writes

@@ -84,6 +84,28 @@ and `eligible_count` in the existing provider-recall telemetry details. This
 makes a score-direction or threshold problem visible through existing logs and
 JSON diagnostics without adding a new public command.
 
+## Mem0 search scope payload compatibility
+
+The self-hosted Mem0 adapter owns the placement of provider entity scope in
+`POST /search`. Every request must carry the configured non-empty `user_id`,
+`agent_id`, and `run_id` values either inside `filters` or as top-level fields;
+the router and hook layers do not rewrite them.
+
+`providers.<name>.search_scope_payload` defines the contract:
+
+- `filters` sends entity IDs only inside `filters`.
+- `top_level` sends entity IDs only at the request top level while retaining
+  non-scope metadata filters inside `filters`.
+- `auto` is the backward-compatible default. It tries `filters`, retries once
+  with `top_level` only for a recognized missing-scope response from `/search`,
+  and caches a successful top-level fallback for that provider instance.
+
+The fallback must not trigger for authentication failures, timeouts, malformed
+queries, embedding failures, vector-store failures, or arbitrary 5xx responses.
+If the fallback itself fails, its error is returned. The adapter does not infer
+the working shape from OpenAPI field presence because Mem0 0.1.117 advertises a
+`filters` field while its runtime still requires a top-level entity ID.
+
 Provider-specific tests supplement this shared matrix with the request shapes
 and response fields each backend actually supports. Coverage is intentionally
 not represented as identical across providers: paxm does not invent tier,

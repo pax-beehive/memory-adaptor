@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1123,6 +1125,77 @@ func TestInternalCodexUserInputHookIsSilentWithoutHits(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("no-hit Codex hook should be silent, got: %s", stdout.String())
+	}
+}
+
+func TestOpenCodeHookRecallsFromTopLevelScopeMem0Server(t *testing.T) {
+	t.Parallel()
+
+	var requestBodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/search" {
+			http.NotFound(w, request)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode search request: %v", err)
+		}
+		requestBodies = append(requestBodies, body)
+		if body["user_id"] == nil && body["agent_id"] == nil && body["run_id"] == nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"detail": "At least one of 'user_id', 'agent_id', or 'run_id' must be provided.",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{
+			"id": "mem-1", "memory": "regulatory scope remains unresolved", "score": 0.91,
+		}}})
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	cfg.Providers["sqlite"] = config.ProviderConfig{Type: "sqlite", Enabled: false, Path: filepath.Join(t.TempDir(), "memory.sqlite")}
+	cfg.Providers["memory"] = config.ProviderConfig{
+		Type: "mem0", Enabled: true, BaseURL: server.URL,
+		UserID: "eval-user", AgentID: "shared-consumer", RunID: "eval-run",
+		ScoreSemantics: "similarity",
+	}
+	cfg.RecallProfiles["passive"] = config.RecallProfileConfig{
+		Providers:  []config.ProviderRouteConfig{{Name: "memory", Required: true, Weight: 1}},
+		MaxResults: 2,
+		Thresholds: config.RecallThresholdConfig{MinRelevance: 0.1, MinScore: 0.1},
+	}
+	opencode := cfg.Agents["opencode"]
+	opencode.Enabled = true
+	userInput := opencode.Hooks["user_input"]
+	userInput.Recall.Profile = "passive"
+	userInput.Recall.Initial = &config.HookInitialRecall{Enabled: false}
+	userInput.Recall.Insertion = config.HookInsertionConfig{MinScore: 0.1, MaxItems: 2}
+	userInput.Write.Enabled = false
+	opencode.Hooks["user_input"] = userInput
+	cfg.Agents["opencode"] = opencode
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	event := strings.NewReader(`{"prompt":"regulatory scope","workspace":"/tmp/team-memory","session_id":"session-7"}`)
+	code := Main([]string{"--config", configPath, "__hook", "--target", "opencode", "--event", "user_input"}, event, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("OpenCode hook failed with code %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "regulatory scope remains unresolved") {
+		t.Fatalf("OpenCode hook omitted recalled Mem0 memory: %s", stdout.String())
+	}
+	if len(requestBodies) != 2 {
+		t.Fatalf("search requests = %#v, want nested attempt followed by top-level fallback", requestBodies)
+	}
+	if requestBodies[1]["user_id"] != "eval-user" || requestBodies[1]["agent_id"] != "shared-consumer" || requestBodies[1]["run_id"] != "eval-run" {
+		t.Fatalf("fallback request lost Mem0 scope: %#v", requestBodies[1])
 	}
 }
 
