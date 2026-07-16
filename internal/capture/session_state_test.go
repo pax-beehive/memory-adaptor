@@ -74,6 +74,19 @@ func TestSessionStateRefreshesWhenAnotherSessionPrunedItsActivity(t *testing.T) 
 	}
 }
 
+func TestSessionStateRefreshesWhenConcurrentSessionOverwroteItsActivity(t *testing.T) {
+	state := NewSessionState(filepath.Join(t.TempDir(), "session_state.json"))
+	now := time.Date(2026, time.July, 16, 9, 0, 0, 0, time.UTC)
+	other := Event{Target: "codex", Event: "session_start", Metadata: map[string]string{"session_id": "session-b"}}
+	if _, err := state.Observe(other, now); err != nil {
+		t.Fatal(err)
+	}
+	missing := Event{Target: "codex", Event: "user_input", Metadata: map[string]string{"session_id": "session-a"}}
+	if refresh, err := state.Observe(missing, now.Add(time.Minute)); err != nil || !refresh {
+		t.Fatalf("overwritten session refresh=%v err=%v", refresh, err)
+	}
+}
+
 func TestSessionStateMigratesInvalidAndLegacyStateFailOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session_state.json")
 	if err := os.WriteFile(path, []byte("not-json"), 0o600); err != nil {

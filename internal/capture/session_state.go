@@ -67,7 +67,8 @@ func (s *SessionState) Observe(event Event, now time.Time) (bool, error) {
 		return false, err
 	}
 	previous, exists := state.Activity[key]
-	refresh := event.Event == "user_input" && ((exists && now.Sub(previous) > localTimeRefreshInterval) || (!exists && state.ActivityPruned))
+	missingAfterSharedActivity := !exists && (state.ActivityPruned || len(state.Activity) > 0)
+	refresh := event.Event == "user_input" && ((exists && now.Sub(previous) > localTimeRefreshInterval) || missingAfterSharedActivity)
 	state.Activity[key] = now.UTC()
 	pruneHookSessionState(&state, now)
 	if err := saveHookSessionState(s.path, state); err != nil {
