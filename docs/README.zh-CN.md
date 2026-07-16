@@ -111,6 +111,10 @@ paxm mcp serve --agent codex
 - `agent_id`：当前 agent 身份，例如 `codex-todd`；
 - `session_id`：本次 agent/runtime 会话身份。
 
+同一次 `session_start` 还会注入当前本地时间和时区。之后每次 `user_input` 都会
+与上一 turn 的最近活动时间比较；间隔严格超过 12 小时时，paxm 会在处理该输入
+前重新注入本地时间。刚好 12 小时不会重复注入。
+
 写入 provider 的 memory 还会带有 `turn_id`（如果当前事件有 turn）以及写入
 profile 的 `scope`。因此一次记忆可以同时回答“谁产生了它”和“它属于哪个可见
 范围”。召回结果会尽量保留这些 metadata；provider adapter 负责把 provider 的

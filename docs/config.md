@@ -654,8 +654,11 @@ internal behaviors and have no user-facing tuning knobs.
 
 `agents.<name>.agent_id` identifies the producing integration in provenance.
 At a native `session_start`, paxm injects `identity.user_id`, this agent ID, and
-the runtime-supplied session ID once as session identity. This bootstrap does
-not replace the origin metadata stored on individual memories.
+the runtime-supplied session ID once as session identity, plus the current
+RFC3339 local time and time-zone name. On later user inputs, paxm refreshes the
+local-time context when the preceding session activity is more than 12 hours
+old. This bootstrap does not replace the origin metadata stored on individual
+memories.
 Passive writes resolve it from the hook target. Start MCP with
 `paxm mcp serve --agent <name>` to attach the corresponding configured identity
 to explicit MCP writes. The MCP tool itself cannot supply an arbitrary user or

@@ -96,6 +96,11 @@ The Claude plugin includes active-memory skills, the paxm MCP server, and five
 lifecycle hooks: `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
 `PostToolUseFailure`, and `Stop`.
 
+Native session-start hooks inject the configured user, agent, and session
+identity together with the current local time and time zone. If a later user
+input arrives more than 12 hours after the preceding turn activity, paxm
+refreshes the local-time context before the agent handles that input.
+
 ### OpenCode, Pi, CLI, or MCP
 
 Install the latest release and run interactive setup. The default SQLite

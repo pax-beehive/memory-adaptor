@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	zepadapter "github.com/pax-beehive/paxm/internal/adapters/zep"
 	"github.com/pax-beehive/paxm/internal/config"
@@ -26,6 +27,7 @@ type Dependencies struct {
 	EnsureZepUser      ensureZepUserFunc
 	ShutdownHookDaemon shutdownHookDaemonFunc
 	AgentExecutor      paxeval.AgentExecutor
+	Now                func() time.Time
 }
 
 type runner struct {
@@ -37,6 +39,7 @@ type runner struct {
 	ensureZepUser      ensureZepUserFunc
 	shutdownHookDaemon shutdownHookDaemonFunc
 	agentExecutor      paxeval.AgentExecutor
+	now                func() time.Time
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -68,6 +71,7 @@ func MainWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Writ
 		ensureZepUser:      deps.EnsureZepUser,
 		shutdownHookDaemon: deps.ShutdownHookDaemon,
 		agentExecutor:      deps.AgentExecutor,
+		now:                deps.Now,
 	}
 	if len(args) == 0 {
 		r.printHelp()
@@ -100,7 +104,17 @@ func (deps Dependencies) withDefaults() Dependencies {
 			return flushExistingHookBuffer(configPath, true)
 		}
 	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
 	return deps
+}
+
+func (r runner) nowTime() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 func (r runner) versionString() string {

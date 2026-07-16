@@ -28,12 +28,15 @@ import (
 	"github.com/pax-beehive/paxm/internal/tools"
 )
 
-func (r runner) writeHookResult(result capture.Result, jsonOut, codexNative bool) error {
+func (r runner) writeHookResult(result capture.Result, jsonOut, codexNative bool, additionalContext string) error {
 	if codexNative {
-		return writeCodexUserPromptHookOutput(r.stdout, result)
+		return writeCodexUserPromptHookOutput(r.stdout, result, additionalContext)
 	}
 	if jsonOut {
 		return writeJSON(r.stdout, result)
+	}
+	if additionalContext != "" {
+		_, _ = fmt.Fprintln(r.stdout, additionalContext)
 	}
 	if result.Skipped || result.Recall == nil {
 		return nil
@@ -51,20 +54,26 @@ type codexUserPromptHookSpecificOutput struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
-func writeCodexUserPromptHookOutput(w io.Writer, result capture.Result) error {
-	if result.Skipped || result.Recall == nil || len(result.Recall.Hits) == 0 {
-		return nil
+func writeCodexUserPromptHookOutput(w io.Writer, result capture.Result, supplemental string) error {
+	contexts := make([]string, 0, 2)
+	if strings.TrimSpace(supplemental) != "" {
+		contexts = append(contexts, strings.TrimSpace(supplemental))
 	}
-	var context bytes.Buffer
-	writeRecallMarkdown(&context, *result.Recall)
-	additionalContext := tools.WrapRecallContext("passive", "Relevant memory recalled by paxm:\n\n"+strings.TrimSpace(context.String()))
-	if additionalContext == "" {
+	if !result.Skipped && result.Recall != nil && len(result.Recall.Hits) > 0 {
+		var context bytes.Buffer
+		writeRecallMarkdown(&context, *result.Recall)
+		recallContext := tools.WrapRecallContext("passive", "Relevant memory recalled by paxm:\n\n"+strings.TrimSpace(context.String()))
+		if recallContext != "" {
+			contexts = append(contexts, recallContext)
+		}
+	}
+	if len(contexts) == 0 {
 		return nil
 	}
 	return writeJSON(w, codexUserPromptHookOutput{
 		HookSpecificOutput: codexUserPromptHookSpecificOutput{
 			HookEventName:     "UserPromptSubmit",
-			AdditionalContext: additionalContext,
+			AdditionalContext: strings.Join(contexts, "\n\n"),
 		},
 	})
 }
@@ -82,11 +91,16 @@ func sessionIdentity(cfg config.Config, event capture.Event) memory.SessionIdent
 }
 
 func writeSessionIdentityBootstrap(w io.Writer, target string, identity memory.SessionIdentity, jsonOut bool) error {
+	return writeSessionIdentityBootstrapAt(w, target, identity, time.Now(), jsonOut)
+}
+
+func writeSessionIdentityBootstrapAt(w io.Writer, target string, identity memory.SessionIdentity, now time.Time, jsonOut bool) error {
 	payload, err := json.Marshal(identity)
 	if err != nil {
 		return err
 	}
-	context := "<paxm-session-identity version=\"1\">\n" + string(payload) + "\n</paxm-session-identity>"
+	identityContext := "<paxm-session-identity version=\"1\">\n" + string(payload) + "\n</paxm-session-identity>"
+	context := identityContext + "\n" + localTimeContext(now)
 	if target == "codex" && jsonOut {
 		return writeJSON(w, codexUserPromptHookOutput{HookSpecificOutput: codexUserPromptHookSpecificOutput{
 			HookEventName: "SessionStart", AdditionalContext: context,
@@ -94,6 +108,23 @@ func writeSessionIdentityBootstrap(w io.Writer, target string, identity memory.S
 	}
 	_, err = fmt.Fprintln(w, context)
 	return err
+}
+
+type localTimeBootstrap struct {
+	LocalTime string `json:"local_time"`
+	TimeZone  string `json:"time_zone"`
+}
+
+func localTimeContext(now time.Time) string {
+	timeZone := now.Location().String()
+	if timeZone == "" || timeZone == "Local" {
+		timeZone, _ = now.Zone()
+	}
+	payload, _ := json.Marshal(localTimeBootstrap{
+		LocalTime: now.Format(time.RFC3339),
+		TimeZone:  timeZone,
+	})
+	return "<paxm-local-time version=\"1\">\n" + string(payload) + "\n</paxm-local-time>"
 }
 
 type hookBufferRequest struct {
@@ -178,14 +209,28 @@ func (r runner) runInternalHook(args []string) error {
 	if err != nil || outcome.Ignored {
 		return err
 	}
+	now := r.nowTime()
+	refreshLocalTime := false
+	if shouldTrackHookActivity(outcome.Event.Event) {
+		var stateErr error
+		refreshLocalTime, stateErr = markHookSessionActivity(hookSessionStatePath(r.configFile()), hookSessionStateKey(outcome.Event), outcome.Event.Event, now)
+		if stateErr != nil {
+			_, _ = fmt.Fprintf(r.stderr, "paxm hook activity state skipped: %s\n", stateErr)
+			refreshLocalTime = false
+		}
+	}
 	if outcome.Event.Event == "session_start" {
-		return writeSessionIdentityBootstrap(r.stdout, outcome.Event.Target, sessionIdentity(cfg, outcome.Event), *jsonOut)
+		return writeSessionIdentityBootstrapAt(r.stdout, outcome.Event.Target, sessionIdentity(cfg, outcome.Event), now, *jsonOut)
 	}
 	if outcome.Result == nil {
 		return nil
 	}
 	codexNative := *jsonOut && outcome.Event.Target == "codex" && outcome.Event.Event == "user_input"
-	return r.writeHookResult(*outcome.Result, *jsonOut, codexNative)
+	additionalContext := ""
+	if refreshLocalTime {
+		additionalContext = localTimeContext(now)
+	}
+	return r.writeHookResult(*outcome.Result, *jsonOut, codexNative, additionalContext)
 }
 
 func (r runner) runHookControl(args []string) error {
@@ -987,14 +1032,45 @@ func hookSessionStatePath(configPath string) string {
 }
 
 const (
-	hookSessionStateVersion    = 1
+	hookSessionStateVersion    = 2
 	hookSessionStateMaxEntries = 1000
 	hookSessionStateTTL        = 7 * 24 * time.Hour
+	localTimeRefreshInterval   = 12 * time.Hour
 )
 
 type hookSessionState struct {
-	Version int                  `json:"version"`
-	Seen    map[string]time.Time `json:"seen"`
+	Version  int                  `json:"version"`
+	Seen     map[string]time.Time `json:"seen"`
+	Activity map[string]time.Time `json:"activity,omitempty"`
+}
+
+func shouldTrackHookActivity(event string) bool {
+	switch event {
+	case "session_start", "user_input", "turn_end":
+		return true
+	default:
+		return false
+	}
+}
+
+func markHookSessionActivity(path, key, event string, now time.Time) (bool, error) {
+	if key == "" {
+		return false, nil
+	}
+	state, err := loadHookSessionState(path)
+	if err != nil {
+		return false, err
+	}
+	if state.Activity == nil {
+		state.Activity = make(map[string]time.Time)
+	}
+	pruneHookSessionState(&state, now)
+	previous, exists := state.Activity[key]
+	state.Activity[key] = now.UTC()
+	if err := saveHookSessionState(path, state); err != nil {
+		return false, err
+	}
+	return event == "user_input" && exists && now.Sub(previous) > localTimeRefreshInterval, nil
 }
 
 func markHookSessionSeen(path, key string, now time.Time) (bool, error) {
@@ -1032,6 +1108,9 @@ func loadHookSessionState(path string) (hookSessionState, error) {
 	if state.Seen == nil {
 		state.Seen = make(map[string]time.Time)
 	}
+	if state.Activity == nil {
+		state.Activity = make(map[string]time.Time)
+	}
 	return state, nil
 }
 
@@ -1053,27 +1132,32 @@ func saveHookSessionState(path string, state hookSessionState) error {
 
 func pruneHookSessionState(state *hookSessionState, now time.Time) {
 	cutoff := now.Add(-hookSessionStateTTL)
-	for key, seenAt := range state.Seen {
+	pruneHookTimes(state.Seen, cutoff)
+	pruneHookTimes(state.Activity, cutoff)
+}
+
+func pruneHookTimes(values map[string]time.Time, cutoff time.Time) {
+	for key, seenAt := range values {
 		if seenAt.Before(cutoff) {
-			delete(state.Seen, key)
+			delete(values, key)
 		}
 	}
-	if len(state.Seen) <= hookSessionStateMaxEntries {
+	if len(values) <= hookSessionStateMaxEntries {
 		return
 	}
 	type seenEntry struct {
 		Key    string
 		SeenAt time.Time
 	}
-	entries := make([]seenEntry, 0, len(state.Seen))
-	for key, seenAt := range state.Seen {
+	entries := make([]seenEntry, 0, len(values))
+	for key, seenAt := range values {
 		entries = append(entries, seenEntry{Key: key, SeenAt: seenAt})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].SeenAt.Before(entries[j].SeenAt)
 	})
 	for len(entries) > hookSessionStateMaxEntries {
-		delete(state.Seen, entries[0].Key)
+		delete(values, entries[0].Key)
 		entries = entries[1:]
 	}
 }
