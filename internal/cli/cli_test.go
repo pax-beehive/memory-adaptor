@@ -460,8 +460,11 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
 	}
 	output := stdout.String()
-	if strings.Count(output, "installed hook shim") != 2 {
-		t.Fatalf("pi setup should install two hook shims: %s", output)
+	if strings.Count(output, "installed hook shim") != 3 {
+		t.Fatalf("pi setup should install three hook shims: %s", output)
+	}
+	if !strings.Contains(output, "pi-session_start") {
+		t.Fatalf("pi setup did not install session_start shim: %s", output)
 	}
 	if !strings.Contains(output, "pi-user_input") {
 		t.Fatalf("pi setup did not install user_input shim: %s", output)
@@ -492,6 +495,8 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		`onRuntimeEvent("agent_end"`,
 		`onRuntimeEvent("session_shutdown"`,
 		`schema_version: "paxm.pi.user_input.v1"`,
+		`schema_version: "paxm.pi.session_start.v1"`,
+		`additional_context`,
 		`schema_version: "paxm.pi.turn_end.v1"`,
 		`target: "pi"`,
 		`event: "user_input"`,
@@ -506,6 +511,7 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		`event?.result`,
 		`"thinking", "reasoning", "analysis", "redacted_thinking"`,
 		`pi-user_input`,
+		`pi-session_start`,
 		`pi-turn_end`,
 	} {
 		if !strings.Contains(extensionText, expected) {
@@ -723,6 +729,8 @@ func TestCLISetupConfiguresSelectedAgentsInOrder(t *testing.T) {
 	hooksDir := filepath.Join(filepath.Dir(configPath), "hooks")
 	for _, path := range []string{
 		filepath.Join(hooksDir, "codex-user_input"),
+		filepath.Join(hooksDir, "codex-session_start"),
+		filepath.Join(hooksDir, "claude-session_start"),
 		filepath.Join(hooksDir, "claude-turn_end"),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -730,9 +738,7 @@ func TestCLISetupConfiguresSelectedAgentsInOrder(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		filepath.Join(hooksDir, "codex-session_start"),
 		filepath.Join(hooksDir, "codex-turn_end"),
-		filepath.Join(hooksDir, "claude-session_start"),
 		filepath.Join(hooksDir, "claude-user_input"),
 	} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -1136,6 +1142,11 @@ func TestCodexUserInputRefreshesLocalTimeAfterTwelveHourTurnGap(t *testing.T) {
 	if output := run(started.Add(13*time.Hour), "user_input", "session-recent-turn"); output != "" {
 		t.Fatalf("recent turn end should suppress local time refresh: %s", output)
 	}
+
+	run(started, "session_start", "session-eight-days")
+	if output := run(started.Add(8*24*time.Hour), "user_input", "session-eight-days"); !strings.Contains(output, `<paxm-local-time version="1">`) {
+		t.Fatalf("eight-day turn gap should refresh local time: %s", output)
+	}
 }
 
 func TestWriteHookResultFormatsJSONMarkdownAndEmptyResults(t *testing.T) {
@@ -1157,6 +1168,13 @@ func TestWriteHookResultFormatsJSONMarkdownAndEmptyResults(t *testing.T) {
 	var output bytes.Buffer
 	if err := (runner{stdout: &output}).writeHookResult(capture.Result{Skipped: true}, false, false, ""); err != nil || output.Len() != 0 {
 		t.Fatalf("empty result output = %q err=%v", output.String(), err)
+	}
+	context := `<paxm-local-time version="1">local</paxm-local-time>`
+	if err := (runner{stdout: &output}).writeHookResult(capture.Result{Target: "pi", Event: "user_input", Skipped: true}, true, false, context); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"additional_context"`) || !strings.Contains(output.String(), "paxm-local-time") {
+		t.Fatalf("generic JSON hook omitted supplemental context: %s", output.String())
 	}
 }
 
@@ -1411,10 +1429,18 @@ func TestCodexTranscriptToolMessagesReadsCurrentTurnAndExcludesReasoning(t *test
 
 func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.DefaultConfig(configPath)
-	r := runner{configPath: configPath, stderr: &bytes.Buffer{}}
+	state := capture.NewSessionState(hookSessionStatePath(configPath))
+	now := time.Date(2026, time.July, 16, 9, 0, 0, 0, time.UTC)
+	mark := func(event capture.Event) capture.Event {
+		t.Helper()
+		marked, err := state.MarkInitial(event, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return marked
+	}
 
-	first := r.markInitialUserInputRecall(cfg, capture.Event{
+	first := mark(capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
@@ -1425,7 +1451,7 @@ func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 		t.Fatalf("first user_input should use initial recall: %#v", first.Metadata)
 	}
 
-	second := r.markInitialUserInputRecall(cfg, capture.Event{
+	second := mark(capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
@@ -1436,7 +1462,7 @@ func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 		t.Fatalf("second user_input should stay strict: %#v", second.Metadata)
 	}
 
-	nextSession := r.markInitialUserInputRecall(cfg, capture.Event{
+	nextSession := mark(capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{

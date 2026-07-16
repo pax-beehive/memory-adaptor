@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +32,9 @@ func (r runner) writeHookResult(result capture.Result, jsonOut, codexNative bool
 		return writeCodexUserPromptHookOutput(r.stdout, result, additionalContext)
 	}
 	if jsonOut {
+		if additionalContext != "" {
+			return writeJSON(r.stdout, hookJSONOutput{Result: result, AdditionalContext: additionalContext})
+		}
 		return writeJSON(r.stdout, result)
 	}
 	if additionalContext != "" {
@@ -43,6 +45,11 @@ func (r runner) writeHookResult(result capture.Result, jsonOut, codexNative bool
 	}
 	writeRecallContextMarkdown(r.stdout, *result.Recall, "passive")
 	return nil
+}
+
+type hookJSONOutput struct {
+	capture.Result
+	AdditionalContext string `json:"additional_context,omitempty"`
 }
 
 type codexUserPromptHookOutput struct {
@@ -183,10 +190,11 @@ func (r runner) runInternalHook(args []string) error {
 		return rt.Capture.Recall(ctx, value)
 	})
 	handler := capture.Handler{
-		Config:      cfg,
-		SourceOwner: os.Getenv("PAXM_INTEGRATION_OWNER"),
-		Recall:      lazyRecall,
-		MarkInitial: func(value capture.Event) (capture.Event, error) { return r.markInitialUserInputRecall(cfg, value), nil },
+		Config:       cfg,
+		SourceOwner:  os.Getenv("PAXM_INTEGRATION_OWNER"),
+		Recall:       lazyRecall,
+		SessionState: capture.NewSessionState(hookSessionStatePath(r.configFile())),
+		Now:          r.nowTime,
 		Buffer: func(value capture.Event) error {
 			started := time.Now()
 			response, bufferErr := r.sendHookToBuffer(value)
@@ -206,19 +214,13 @@ func (r runner) runInternalHook(args []string) error {
 	if outcome.BufferError != nil {
 		_, _ = fmt.Fprintf(r.stderr, "paxm hook buffer skipped: %s\n", outcome.BufferError)
 	}
+	if outcome.ActivityError != nil {
+		_, _ = fmt.Fprintf(r.stderr, "paxm hook activity state skipped: %s\n", outcome.ActivityError)
+	}
 	if err != nil || outcome.Ignored {
 		return err
 	}
-	now := r.nowTime()
-	refreshLocalTime := false
-	if shouldTrackHookActivity(outcome.Event.Event) {
-		var stateErr error
-		refreshLocalTime, stateErr = markHookSessionActivity(hookSessionStatePath(r.configFile()), hookSessionStateKey(outcome.Event), outcome.Event.Event, now)
-		if stateErr != nil {
-			_, _ = fmt.Fprintf(r.stderr, "paxm hook activity state skipped: %s\n", stateErr)
-			refreshLocalTime = false
-		}
-	}
+	now := outcome.ContextTime
 	if outcome.Event.Event == "session_start" {
 		return writeSessionIdentityBootstrapAt(r.stdout, outcome.Event.Target, sessionIdentity(cfg, outcome.Event), now, *jsonOut)
 	}
@@ -227,7 +229,7 @@ func (r runner) runInternalHook(args []string) error {
 	}
 	codexNative := *jsonOut && outcome.Event.Target == "codex" && outcome.Event.Event == "user_input"
 	additionalContext := ""
-	if refreshLocalTime {
+	if outcome.RefreshLocalTime {
 		additionalContext = localTimeContext(now)
 	}
 	return r.writeHookResult(*outcome.Result, *jsonOut, codexNative, additionalContext)
@@ -972,27 +974,6 @@ func hookWriteProfile(cfg config.Config, event capture.Event) string {
 	return "default"
 }
 
-func (r runner) markInitialUserInputRecall(cfg config.Config, event capture.Event) capture.Event {
-	_ = cfg // policy eligibility is owned by capture.Handler
-	key := hookSessionStateKey(event)
-	if key == "" {
-		return event
-	}
-	first, err := markHookSessionSeen(hookSessionStatePath(r.configFile()), key, time.Now().UTC())
-	if err != nil {
-		_, _ = fmt.Fprintf(r.stderr, "paxm hook state skipped: %s\n", err)
-		return event
-	}
-	if !first {
-		return event
-	}
-	if event.Metadata == nil {
-		event.Metadata = make(map[string]string)
-	}
-	event.Metadata[capture.RecallPhaseMetadataKey] = capture.RecallPhaseInitial
-	return event
-}
-
 // Compatibility helpers keep existing tests and integrations on the capture
 // policy while the CLI remains only an adapter.
 func hookSourceAllowed(cfg config.Config, event capture.Event) bool {
@@ -1007,159 +988,8 @@ func hookInitialRecallEnabled(cfg config.Config, event capture.Event) bool {
 	return capture.InitialRecallEnabled(cfg, event)
 }
 
-func hookSessionStateKey(event capture.Event) string {
-	target := event.Target
-	if target == "" {
-		target = "codex"
-	}
-	if value := strings.TrimSpace(event.Metadata["session_id"]); value != "" {
-		return target + "/session/" + value
-	}
-	if value := strings.TrimSpace(event.Metadata["transcript_path"]); value != "" {
-		return target + "/transcript/" + value
-	}
-	if value := strings.TrimSpace(event.Workspace); value != "" {
-		return target + "/workspace/" + value
-	}
-	if value := strings.TrimSpace(event.Metadata["cwd"]); value != "" {
-		return target + "/workspace/" + value
-	}
-	return ""
-}
-
 func hookSessionStatePath(configPath string) string {
 	return filepath.Join(filepath.Dir(config.ExpandPath(configPath)), "hooks", "session_state.json")
-}
-
-const (
-	hookSessionStateVersion    = 2
-	hookSessionStateMaxEntries = 1000
-	hookSessionStateTTL        = 7 * 24 * time.Hour
-	localTimeRefreshInterval   = 12 * time.Hour
-)
-
-type hookSessionState struct {
-	Version  int                  `json:"version"`
-	Seen     map[string]time.Time `json:"seen"`
-	Activity map[string]time.Time `json:"activity,omitempty"`
-}
-
-func shouldTrackHookActivity(event string) bool {
-	switch event {
-	case "session_start", "user_input", "turn_end":
-		return true
-	default:
-		return false
-	}
-}
-
-func markHookSessionActivity(path, key, event string, now time.Time) (bool, error) {
-	if key == "" {
-		return false, nil
-	}
-	state, err := loadHookSessionState(path)
-	if err != nil {
-		return false, err
-	}
-	if state.Activity == nil {
-		state.Activity = make(map[string]time.Time)
-	}
-	pruneHookSessionState(&state, now)
-	previous, exists := state.Activity[key]
-	state.Activity[key] = now.UTC()
-	if err := saveHookSessionState(path, state); err != nil {
-		return false, err
-	}
-	return event == "user_input" && exists && now.Sub(previous) > localTimeRefreshInterval, nil
-}
-
-func markHookSessionSeen(path, key string, now time.Time) (bool, error) {
-	state, err := loadHookSessionState(path)
-	if err != nil {
-		return false, err
-	}
-	if state.Seen == nil {
-		state.Seen = make(map[string]time.Time)
-	}
-	pruneHookSessionState(&state, now)
-	_, exists := state.Seen[key]
-	state.Seen[key] = now.UTC()
-	if err := saveHookSessionState(path, state); err != nil {
-		return false, err
-	}
-	return !exists, nil
-}
-
-func loadHookSessionState(path string) (hookSessionState, error) {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return hookSessionState{Version: hookSessionStateVersion, Seen: make(map[string]time.Time)}, nil
-		}
-		return hookSessionState{}, err
-	}
-	var state hookSessionState
-	if err := json.Unmarshal(bytes, &state); err != nil {
-		return hookSessionState{Version: hookSessionStateVersion, Seen: make(map[string]time.Time)}, nil
-	}
-	if state.Version == 0 {
-		state.Version = hookSessionStateVersion
-	}
-	if state.Seen == nil {
-		state.Seen = make(map[string]time.Time)
-	}
-	if state.Activity == nil {
-		state.Activity = make(map[string]time.Time)
-	}
-	return state, nil
-}
-
-func saveHookSessionState(path string, state hookSessionState) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	state.Version = hookSessionStateVersion
-	bytes, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
-	if err := os.WriteFile(tmp, bytes, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-func pruneHookSessionState(state *hookSessionState, now time.Time) {
-	cutoff := now.Add(-hookSessionStateTTL)
-	pruneHookTimes(state.Seen, cutoff)
-	pruneHookTimes(state.Activity, cutoff)
-}
-
-func pruneHookTimes(values map[string]time.Time, cutoff time.Time) {
-	for key, seenAt := range values {
-		if seenAt.Before(cutoff) {
-			delete(values, key)
-		}
-	}
-	if len(values) <= hookSessionStateMaxEntries {
-		return
-	}
-	type seenEntry struct {
-		Key    string
-		SeenAt time.Time
-	}
-	entries := make([]seenEntry, 0, len(values))
-	for key, seenAt := range values {
-		entries = append(entries, seenEntry{Key: key, SeenAt: seenAt})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].SeenAt.Before(entries[j].SeenAt)
-	})
-	for len(entries) > hookSessionStateMaxEntries {
-		delete(values, entries[0].Key)
-		entries = entries[1:]
-	}
 }
 
 func boolInt(value bool) int {

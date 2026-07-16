@@ -113,7 +113,9 @@ paxm mcp serve --agent codex
 
 同一次 `session_start` 还会注入当前本地时间和时区。之后每次 `user_input` 都会
 与上一 turn 的最近活动时间比较；间隔严格超过 12 小时时，paxm 会在处理该输入
-前重新注入本地时间。刚好 12 小时不会重复注入。
+前重新注入本地时间。刚好 12 小时不会重复注入。Codex、Claude Code 和 Pi 使用
+各自的 session-start 事件；OpenCode 会在该 session 的第一条消息前完成同样的
+bootstrap。
 
 写入 provider 的 memory 还会带有 `turn_id`（如果当前事件有 turn）以及写入
 profile 的 `scope`。因此一次记忆可以同时回答“谁产生了它”和“它属于哪个可见

@@ -2028,7 +2028,7 @@ func hookInstallEventsForAgent(agent config.AgentConfig) []hookInstallEvent {
 	events := make([]hookInstallEvent, 0, len(agent.Hooks))
 	for _, installEvent := range installedHookEvents() {
 		hook, ok := agent.Hooks[installEvent.ConfigEvent]
-		if ok && (hook.Recall.Enabled || hook.Write.Enabled) {
+		if (agent.Enabled && installEvent.ConfigEvent == "session_start") || (ok && (hook.Recall.Enabled || hook.Write.Enabled)) {
 			events = append(events, installEvent)
 		}
 	}
@@ -2123,24 +2123,27 @@ func piExtensionPath() string {
 }
 
 func installPiGlobalHook(path string, scriptPaths map[string]string) error {
+	sessionStartScriptPath := strings.TrimSpace(scriptPaths["session_start"])
 	userInputScriptPath := strings.TrimSpace(scriptPaths["user_input"])
 	turnEndScriptPath := strings.TrimSpace(scriptPaths["turn_end"])
-	if userInputScriptPath == "" && turnEndScriptPath == "" {
+	if sessionStartScriptPath == "" && userInputScriptPath == "" && turnEndScriptPath == "" {
 		return errors.New("pi hook requires at least one hook shim")
 	}
 	path = config.ExpandPath(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(piHookExtensionSource(userInputScriptPath, turnEndScriptPath)), 0o644)
+	return os.WriteFile(path, []byte(piHookExtensionSource(sessionStartScriptPath, userInputScriptPath, turnEndScriptPath)), 0o644)
 }
 
-func piHookExtensionSource(userInputScriptPath, turnEndScriptPath string) string {
+func piHookExtensionSource(sessionStartScriptPath, userInputScriptPath, turnEndScriptPath string) string {
+	sessionStartScriptLiteral := jsonStringLiteral(config.ExpandPath(sessionStartScriptPath))
 	userInputScriptLiteral := jsonStringLiteral(config.ExpandPath(userInputScriptPath))
 	turnEndScriptLiteral := jsonStringLiteral(config.ExpandPath(turnEndScriptPath))
 	return `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
 
+const paxmSessionStartHookCommand = ` + sessionStartScriptLiteral + `;
 const paxmUserInputHookCommand = ` + userInputScriptLiteral + `;
 const paxmTurnEndHookCommand = ` + turnEndScriptLiteral + `;
 const maxBufferedMessages = 20;
@@ -2153,6 +2156,7 @@ type BufferedMessage = {
 
 let activeContext: any;
 let lastPrompt = "";
+let pendingSessionContext = "";
 let turnMessages: BufferedMessage[] = [];
 const pendingToolArgs = new Map<string, any>();
 
@@ -2294,7 +2298,11 @@ function formatPaxmRecall(raw: string): string {
   if (raw.trim() === "") return "";
   try {
     const result = JSON.parse(raw);
-    if (result?.skipped || !result?.recall?.hits?.length) return "";
+	const contexts: string[] = [];
+	if (typeof result?.additional_context === "string" && result.additional_context.trim() !== "") {
+	  contexts.push(result.additional_context.trim());
+	}
+	if (result?.skipped || !result?.recall?.hits?.length) return contexts.join("\n\n");
     const lines = ["paxm memory recall:"];
     for (const hit of result.recall.hits) {
       const score = typeof hit.score === "number" ? hit.score.toFixed(4) : "n/a";
@@ -2303,12 +2311,11 @@ function formatPaxmRecall(raw: string): string {
       if (text === "") continue;
       lines.push("- [" + provider + " score=" + score + "] " + text);
     }
-    return lines.length > 1
-      ? '<paxm-recall version="1" mode="passive">\n' + lines.join("\n") + "\n</paxm-recall>"
-      : "";
+	if (lines.length > 1) contexts.push('<paxm-recall version="1" mode="passive">\n' + lines.join("\n") + "\n</paxm-recall>");
+	return contexts.join("\n\n");
   } catch {
     const text = escapePaxmRecallText(raw.trim());
-    if (text === "" || text.includes("<paxm-recall")) return text;
+    if (text === "" || text.includes("<paxm-recall") || text.includes("<paxm-local-time") || text.includes("<paxm-session-identity")) return text;
     return '<paxm-recall version="1" mode="passive">\n' + text + "\n</paxm-recall>";
   }
 }
@@ -2327,6 +2334,21 @@ export default function (pi: ExtensionAPI) {
     lastPrompt = "";
     turnMessages = [];
     pendingToolArgs.clear();
+    pendingSessionContext = "";
+    if (paxmSessionStartHookCommand !== "") {
+      const resolvedCtx = activeCtx(ctx);
+      const result = runPaxmHook(paxmSessionStartHookCommand, {
+        schema_version: "paxm.pi.session_start.v1",
+        target: "pi",
+        event: "session_start",
+        agent: "pi",
+        session_id: currentSessionId(resolvedCtx),
+        cwd: currentWorkspace(resolvedCtx),
+        workspace: currentWorkspace(resolvedCtx),
+        source: "pi",
+      }, resolvedCtx, false);
+      if (result.ok) pendingSessionContext = result.stdout.trim();
+    }
   });
 
   onRuntimeEvent("message_end", (event, ctx) => {
@@ -2374,24 +2396,25 @@ export default function (pi: ExtensionAPI) {
     if (paxmTurnEndHookCommand !== "") {
       appendBufferedMessage("user", lastPrompt, "before_agent_start");
     }
-    if (paxmUserInputHookCommand === "") return;
+    let recallContext = "";
 
-    const payload = {
-      schema_version: "paxm.pi.user_input.v1",
-      target: "pi",
-      event: "user_input",
-      agent: "pi",
-      session_id: currentSessionId(resolvedCtx),
-      cwd: currentWorkspace(resolvedCtx),
-      workspace: currentWorkspace(resolvedCtx),
-      prompt: event.prompt,
-      source: "pi",
-    };
-
-    const result = runPaxmHook(paxmUserInputHookCommand, payload, resolvedCtx, true);
-    if (!result.ok) return;
-
-    const content = formatPaxmRecall(result.stdout);
+	if (paxmUserInputHookCommand !== "") {
+      const payload = {
+        schema_version: "paxm.pi.user_input.v1",
+        target: "pi",
+        event: "user_input",
+        agent: "pi",
+        session_id: currentSessionId(resolvedCtx),
+        cwd: currentWorkspace(resolvedCtx),
+        workspace: currentWorkspace(resolvedCtx),
+        prompt: event.prompt,
+        source: "pi",
+      };
+      const result = runPaxmHook(paxmUserInputHookCommand, payload, resolvedCtx, true);
+      if (result.ok) recallContext = formatPaxmRecall(result.stdout);
+    }
+    const content = [pendingSessionContext, recallContext].filter(Boolean).join("\n\n");
+    pendingSessionContext = "";
     if (content === "") return;
 
     return {
