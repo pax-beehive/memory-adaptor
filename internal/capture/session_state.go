@@ -22,9 +22,10 @@ const (
 type SessionState struct{ path string }
 
 type hookSessionState struct {
-	Version  int                  `json:"version"`
-	Seen     map[string]time.Time `json:"seen"`
-	Activity map[string]time.Time `json:"activity,omitempty"`
+	Version        int                  `json:"version"`
+	Seen           map[string]time.Time `json:"seen"`
+	Activity       map[string]time.Time `json:"activity,omitempty"`
+	ActivityPruned bool                 `json:"activity_pruned,omitempty"`
 }
 
 func NewSessionState(path string) *SessionState { return &SessionState{path: path} }
@@ -66,7 +67,7 @@ func (s *SessionState) Observe(event Event, now time.Time) (bool, error) {
 		return false, err
 	}
 	previous, exists := state.Activity[key]
-	refresh := event.Event == "user_input" && exists && now.Sub(previous) > localTimeRefreshInterval
+	refresh := event.Event == "user_input" && ((exists && now.Sub(previous) > localTimeRefreshInterval) || (!exists && state.ActivityPruned))
 	state.Activity[key] = now.UTC()
 	pruneHookSessionState(&state, now)
 	if err := saveHookSessionState(s.path, state); err != nil {
@@ -151,17 +152,21 @@ func saveHookSessionState(path string, state hookSessionState) error {
 func pruneHookSessionState(state *hookSessionState, now time.Time) {
 	cutoff := now.Add(-hookSessionStateTTL)
 	pruneHookTimes(state.Seen, cutoff)
-	pruneHookTimes(state.Activity, cutoff)
+	if pruneHookTimes(state.Activity, cutoff) {
+		state.ActivityPruned = true
+	}
 }
 
-func pruneHookTimes(values map[string]time.Time, cutoff time.Time) {
+func pruneHookTimes(values map[string]time.Time, cutoff time.Time) bool {
+	pruned := false
 	for key, seenAt := range values {
 		if seenAt.Before(cutoff) {
 			delete(values, key)
+			pruned = true
 		}
 	}
 	if len(values) <= hookSessionStateMaxEntries {
-		return
+		return pruned
 	}
 	type seenEntry struct {
 		Key    string
@@ -175,5 +180,7 @@ func pruneHookTimes(values map[string]time.Time, cutoff time.Time) {
 	for len(entries) > hookSessionStateMaxEntries {
 		delete(values, entries[0].Key)
 		entries = entries[1:]
+		pruned = true
 	}
+	return pruned
 }

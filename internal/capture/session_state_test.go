@@ -56,6 +56,24 @@ func TestSessionStateRefreshesBeforePruningLongIdleSession(t *testing.T) {
 	}
 }
 
+func TestSessionStateRefreshesWhenAnotherSessionPrunedItsActivity(t *testing.T) {
+	state := NewSessionState(filepath.Join(t.TempDir(), "session_state.json"))
+	started := time.Date(2026, time.July, 16, 9, 0, 0, 0, time.UTC)
+	sessionStart := func(id string) Event {
+		return Event{Target: "codex", Event: "session_start", Metadata: map[string]string{"session_id": id}}
+	}
+	if _, err := state.Observe(sessionStart("session-a"), started); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Observe(sessionStart("session-b"), started.Add(8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	inputA := Event{Target: "codex", Event: "user_input", Metadata: map[string]string{"session_id": "session-a"}}
+	if refresh, err := state.Observe(inputA, started.Add(8*24*time.Hour+time.Minute)); err != nil || !refresh {
+		t.Fatalf("pruned session refresh=%v err=%v", refresh, err)
+	}
+}
+
 func TestSessionStateMigratesInvalidAndLegacyStateFailOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session_state.json")
 	if err := os.WriteFile(path, []byte("not-json"), 0o600); err != nil {

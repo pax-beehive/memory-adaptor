@@ -217,20 +217,26 @@ func (r runner) runInternalHook(args []string) error {
 	if outcome.ActivityError != nil {
 		_, _ = fmt.Fprintf(r.stderr, "paxm hook activity state skipped: %s\n", outcome.ActivityError)
 	}
-	if err != nil || outcome.Ignored {
-		return err
+	if outcome.Ignored {
+		return nil
 	}
 	now := outcome.ContextTime
 	if outcome.Event.Event == "session_start" {
 		return writeSessionIdentityBootstrapAt(r.stdout, outcome.Event.Target, sessionIdentity(cfg, outcome.Event), now, *jsonOut)
 	}
 	if outcome.Result == nil {
-		return nil
+		return err
 	}
 	codexNative := *jsonOut && outcome.Event.Target == "codex" && outcome.Event.Event == "user_input"
 	additionalContext := ""
 	if outcome.RefreshLocalTime {
 		additionalContext = localTimeContext(now)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(r.stderr, "paxm hook recall skipped: %s\n", err)
+		if additionalContext == "" {
+			return nil
+		}
 	}
 	return r.writeHookResult(*outcome.Result, *jsonOut, codexNative, additionalContext)
 }

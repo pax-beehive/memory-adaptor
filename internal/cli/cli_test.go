@@ -1149,6 +1149,51 @@ func TestCodexUserInputRefreshesLocalTimeAfterTwelveHourTurnGap(t *testing.T) {
 	}
 }
 
+func TestCodexUserInputRefreshesLocalTimeWhenPassiveRecallFails(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	cfg.Providers["sqlite"] = config.ProviderConfig{Type: "sqlite", Enabled: true, Path: t.TempDir()}
+	codex := cfg.Agents["codex"]
+	codex.Enabled = true
+	codex.Integration.Owner = config.IntegrationOwnerCodexPlugin
+	for _, eventName := range []string{"session_start", "user_input"} {
+		hook := codex.Hooks[eventName]
+		hook.Write.Enabled = false
+		hook.Recall.Enabled = eventName == "user_input"
+		codex.Hooks[eventName] = hook
+	}
+	cfg.Agents["codex"] = codex
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PAXM_INTEGRATION_OWNER", config.IntegrationOwnerCodexPlugin)
+	zone := time.FixedZone("PDT", -7*60*60)
+	started := time.Date(2026, time.July, 16, 9, 0, 0, 0, zone)
+	run := func(now time.Time, eventName string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := MainWithDependencies(
+			[]string{"--config", configPath, "__hook", "--target", "codex", "--event", eventName, "--json"},
+			strings.NewReader(`{"session_id":"recall-failure","prompt":"continue"}`),
+			&stdout, &stderr, Dependencies{Now: func() time.Time { return now }},
+		)
+		return code, stdout.String(), stderr.String()
+	}
+	if code, _, stderr := run(started, "session_start"); code != 0 {
+		t.Fatalf("session start failed with code %d: %s", code, stderr)
+	}
+	code, stdout, stderr := run(started.Add(12*time.Hour+time.Second), "user_input")
+	if code != 0 {
+		t.Fatalf("failed recall should remain fail-open, code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "paxm-local-time") {
+		t.Fatalf("failed recall swallowed local time context: %s", stdout)
+	}
+	if !strings.Contains(stderr, "paxm hook recall skipped:") {
+		t.Fatalf("failed recall was not diagnosed: %s", stderr)
+	}
+}
+
 func TestWriteHookResultFormatsJSONMarkdownAndEmptyResults(t *testing.T) {
 	result := capture.Result{Target: "claude", Event: "user_input", Recall: &tools.RecallResult{
 		Query: "memory", Hits: []memory.MemoryHit{{Provider: "sqlite", ID: "one", Text: "remember this", Score: 0.9}},
