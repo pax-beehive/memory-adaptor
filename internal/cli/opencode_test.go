@@ -29,11 +29,13 @@ func TestOpenCodeConfigDir(t *testing.T) {
 func TestInstallOpenCodeGlobalHook(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plugins", "paxm.ts")
+	sessionStart := filepath.Join(dir, "hooks", "opencode-session_start")
 	userInput := filepath.Join(dir, "hooks", "opencode-user_input")
 	turnEnd := filepath.Join(dir, "hooks", "opencode-turn_end")
 	if err := installOpenCodeGlobalHook(path, map[string]string{
-		"user_input": userInput,
-		"turn_end":   turnEnd,
+		"session_start": sessionStart,
+		"user_input":    userInput,
+		"turn_end":      turnEnd,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -50,9 +52,12 @@ func TestInstallOpenCodeGlobalHook(t *testing.T) {
 		`event.type !== "session.idle"`,
 		`client.session.messages`,
 		`paxm.opencode.user_input.v1`,
+		`paxm.opencode.session_start.v1`,
+		`additional_context`,
 		`paxm.opencode.turn_end.v1`,
 		`target: "opencode"`,
 		userInput,
+		sessionStart,
 		turnEnd,
 	} {
 		if !strings.Contains(source, expected) {

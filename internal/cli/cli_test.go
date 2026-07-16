@@ -460,8 +460,11 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		t.Fatalf("setup failed with code %d: %s", code, stderr.String())
 	}
 	output := stdout.String()
-	if strings.Count(output, "installed hook shim") != 2 {
-		t.Fatalf("pi setup should install two hook shims: %s", output)
+	if strings.Count(output, "installed hook shim") != 3 {
+		t.Fatalf("pi setup should install three hook shims: %s", output)
+	}
+	if !strings.Contains(output, "pi-session_start") {
+		t.Fatalf("pi setup did not install session_start shim: %s", output)
 	}
 	if !strings.Contains(output, "pi-user_input") {
 		t.Fatalf("pi setup did not install user_input shim: %s", output)
@@ -492,6 +495,8 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		`onRuntimeEvent("agent_end"`,
 		`onRuntimeEvent("session_shutdown"`,
 		`schema_version: "paxm.pi.user_input.v1"`,
+		`schema_version: "paxm.pi.session_start.v1"`,
+		`additional_context`,
 		`schema_version: "paxm.pi.turn_end.v1"`,
 		`target: "pi"`,
 		`event: "user_input"`,
@@ -506,6 +511,7 @@ func TestCLISetupInstallsPiHookExtension(t *testing.T) {
 		`event?.result`,
 		`"thinking", "reasoning", "analysis", "redacted_thinking"`,
 		`pi-user_input`,
+		`pi-session_start`,
 		`pi-turn_end`,
 	} {
 		if !strings.Contains(extensionText, expected) {
@@ -723,6 +729,8 @@ func TestCLISetupConfiguresSelectedAgentsInOrder(t *testing.T) {
 	hooksDir := filepath.Join(filepath.Dir(configPath), "hooks")
 	for _, path := range []string{
 		filepath.Join(hooksDir, "codex-user_input"),
+		filepath.Join(hooksDir, "codex-session_start"),
+		filepath.Join(hooksDir, "claude-session_start"),
 		filepath.Join(hooksDir, "claude-turn_end"),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -730,9 +738,7 @@ func TestCLISetupConfiguresSelectedAgentsInOrder(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		filepath.Join(hooksDir, "codex-session_start"),
 		filepath.Join(hooksDir, "codex-turn_end"),
-		filepath.Join(hooksDir, "claude-session_start"),
 		filepath.Join(hooksDir, "claude-user_input"),
 	} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -1052,6 +1058,11 @@ func TestInternalSessionStartInjectsConfiguredIdentity(t *testing.T) {
 			t.Fatalf("identity context omitted %q: %#v", value, output)
 		}
 	}
+	for _, value := range []string{`<paxm-local-time version="1">`, `"local_time":`, `"time_zone":`} {
+		if !strings.Contains(output.HookSpecificOutput.AdditionalContext, value) {
+			t.Fatalf("local time context omitted %q: %#v", value, output)
+		}
+	}
 }
 
 func TestSessionIdentityFallbackAndPlainBootstrap(t *testing.T) {
@@ -1069,6 +1080,120 @@ func TestSessionIdentityFallbackAndPlainBootstrap(t *testing.T) {
 	}
 }
 
+func TestCodexUserInputRefreshesLocalTimeAfterTwelveHourTurnGap(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	cfg.Providers["sqlite"] = config.ProviderConfig{Type: "sqlite", Enabled: true, Path: filepath.Join(t.TempDir(), "memory.sqlite")}
+	codex := cfg.Agents["codex"]
+	codex.Enabled = true
+	codex.Integration.Owner = config.IntegrationOwnerCodexPlugin
+	for _, event := range []string{"session_start", "user_input", "turn_end"} {
+		hook := codex.Hooks[event]
+		hook.Recall.Enabled = false
+		hook.Write.Enabled = false
+		codex.Hooks[event] = hook
+	}
+	cfg.Agents["codex"] = codex
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PAXM_INTEGRATION_OWNER", config.IntegrationOwnerCodexPlugin)
+
+	zone := time.FixedZone("PDT", -7*60*60)
+	started := time.Date(2026, time.July, 16, 9, 0, 0, 0, zone)
+	run := func(now time.Time, eventName, sessionID string) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		input := strings.NewReader(fmt.Sprintf(`{"session_id":%q,"prompt":"continue"}`, sessionID))
+		code := MainWithDependencies(
+			[]string{"--config", configPath, "__hook", "--target", "codex", "--event", eventName, "--json"},
+			input, &stdout, &stderr, Dependencies{Now: func() time.Time { return now }},
+		)
+		if code != 0 {
+			t.Fatalf("%s hook failed with code %d: %s", eventName, code, stderr.String())
+		}
+		if stdout.Len() == 0 {
+			return ""
+		}
+		var output codexUserPromptHookOutput
+		if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+			t.Fatalf("%s hook output is not JSON: %v\n%s", eventName, err, stdout.String())
+		}
+		return output.HookSpecificOutput.AdditionalContext
+	}
+
+	if output := run(started, "session_start", "session-within"); !strings.Contains(output, `"local_time":"2026-07-16T09:00:00-07:00"`) {
+		t.Fatalf("session start local time = %s", output)
+	}
+	if output := run(started.Add(12*time.Hour), "user_input", "session-within"); output != "" {
+		t.Fatalf("exactly twelve hours should not refresh local time: %s", output)
+	}
+
+	run(started, "session_start", "session-stale")
+	output := run(started.Add(12*time.Hour+time.Second), "user_input", "session-stale")
+	for _, value := range []string{`<paxm-local-time version="1">`, `"local_time":"2026-07-16T21:00:01-07:00"`, `"time_zone":"PDT"`} {
+		if !strings.Contains(output, value) {
+			t.Fatalf("stale user input omitted %q: %s", value, output)
+		}
+	}
+
+	run(started, "session_start", "session-recent-turn")
+	run(started.Add(11*time.Hour), "turn_end", "session-recent-turn")
+	if output := run(started.Add(13*time.Hour), "user_input", "session-recent-turn"); output != "" {
+		t.Fatalf("recent turn end should suppress local time refresh: %s", output)
+	}
+
+	run(started, "session_start", "session-eight-days")
+	if output := run(started.Add(8*24*time.Hour), "user_input", "session-eight-days"); !strings.Contains(output, `<paxm-local-time version="1">`) {
+		t.Fatalf("eight-day turn gap should refresh local time: %s", output)
+	}
+}
+
+func TestCodexUserInputRefreshesLocalTimeWhenPassiveRecallFails(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.DefaultConfig(configPath)
+	cfg.Providers["sqlite"] = config.ProviderConfig{Type: "sqlite", Enabled: true, Path: t.TempDir()}
+	codex := cfg.Agents["codex"]
+	codex.Enabled = true
+	codex.Integration.Owner = config.IntegrationOwnerCodexPlugin
+	for _, eventName := range []string{"session_start", "user_input"} {
+		hook := codex.Hooks[eventName]
+		hook.Write.Enabled = false
+		hook.Recall.Enabled = eventName == "user_input"
+		codex.Hooks[eventName] = hook
+	}
+	cfg.Agents["codex"] = codex
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PAXM_INTEGRATION_OWNER", config.IntegrationOwnerCodexPlugin)
+	zone := time.FixedZone("PDT", -7*60*60)
+	started := time.Date(2026, time.July, 16, 9, 0, 0, 0, zone)
+	run := func(now time.Time, eventName string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := MainWithDependencies(
+			[]string{"--config", configPath, "__hook", "--target", "codex", "--event", eventName, "--json"},
+			strings.NewReader(`{"session_id":"recall-failure","prompt":"continue"}`),
+			&stdout, &stderr, Dependencies{Now: func() time.Time { return now }},
+		)
+		return code, stdout.String(), stderr.String()
+	}
+	if code, _, stderr := run(started, "session_start"); code != 0 {
+		t.Fatalf("session start failed with code %d: %s", code, stderr)
+	}
+	code, stdout, stderr := run(started.Add(12*time.Hour+time.Second), "user_input")
+	if code != 0 {
+		t.Fatalf("failed recall should remain fail-open, code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "paxm-local-time") {
+		t.Fatalf("failed recall swallowed local time context: %s", stdout)
+	}
+	if !strings.Contains(stderr, "paxm hook recall skipped:") {
+		t.Fatalf("failed recall was not diagnosed: %s", stderr)
+	}
+}
+
 func TestWriteHookResultFormatsJSONMarkdownAndEmptyResults(t *testing.T) {
 	result := capture.Result{Target: "claude", Event: "user_input", Recall: &tools.RecallResult{
 		Query: "memory", Hits: []memory.MemoryHit{{Provider: "sqlite", ID: "one", Text: "remember this", Score: 0.9}},
@@ -1077,7 +1202,7 @@ func TestWriteHookResultFormatsJSONMarkdownAndEmptyResults(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var output bytes.Buffer
 			r := runner{stdout: &output}
-			if err := r.writeHookResult(result, jsonOut, false); err != nil {
+			if err := r.writeHookResult(result, jsonOut, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(output.String(), "remember this") {
@@ -1086,8 +1211,35 @@ func TestWriteHookResultFormatsJSONMarkdownAndEmptyResults(t *testing.T) {
 		})
 	}
 	var output bytes.Buffer
-	if err := (runner{stdout: &output}).writeHookResult(capture.Result{Skipped: true}, false, false); err != nil || output.Len() != 0 {
+	if err := (runner{stdout: &output}).writeHookResult(capture.Result{Skipped: true}, false, false, ""); err != nil || output.Len() != 0 {
 		t.Fatalf("empty result output = %q err=%v", output.String(), err)
+	}
+	context := `<paxm-local-time version="1">local</paxm-local-time>`
+	if err := (runner{stdout: &output}).writeHookResult(capture.Result{Target: "pi", Event: "user_input", Skipped: true}, true, false, context); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"additional_context"`) || !strings.Contains(output.String(), "paxm-local-time") {
+		t.Fatalf("generic JSON hook omitted supplemental context: %s", output.String())
+	}
+}
+
+func TestCodexUserInputCombinesLocalTimeRefreshWithRecalledMemory(t *testing.T) {
+	result := capture.Result{Target: "codex", Event: "user_input", Recall: &tools.RecallResult{
+		Query: "memory", Hits: []memory.MemoryHit{{Provider: "sqlite", ID: "one", Text: "remember this", Score: 0.9}},
+	}}
+	var output bytes.Buffer
+	context := localTimeContext(time.Date(2026, time.July, 16, 21, 0, 1, 0, time.FixedZone("PDT", -7*60*60)))
+	if err := (runner{stdout: &output}).writeHookResult(result, true, true, context); err != nil {
+		t.Fatal(err)
+	}
+	var decoded codexUserPromptHookOutput
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{`<paxm-local-time version="1">`, `"local_time":"2026-07-16T21:00:01-07:00"`, `<paxm-recall version="1" mode="passive">`, "remember this"} {
+		if !strings.Contains(decoded.HookSpecificOutput.AdditionalContext, value) {
+			t.Fatalf("combined context omitted %q: %#v", value, decoded)
+		}
 	}
 }
 
@@ -1322,10 +1474,18 @@ func TestCodexTranscriptToolMessagesReadsCurrentTurnAndExcludesReasoning(t *test
 
 func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.DefaultConfig(configPath)
-	r := runner{configPath: configPath, stderr: &bytes.Buffer{}}
+	state := capture.NewSessionState(hookSessionStatePath(configPath))
+	now := time.Date(2026, time.July, 16, 9, 0, 0, 0, time.UTC)
+	mark := func(event capture.Event) capture.Event {
+		t.Helper()
+		marked, err := state.MarkInitial(event, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return marked
+	}
 
-	first := r.markInitialUserInputRecall(cfg, capture.Event{
+	first := mark(capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
@@ -1336,7 +1496,7 @@ func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 		t.Fatalf("first user_input should use initial recall: %#v", first.Metadata)
 	}
 
-	second := r.markInitialUserInputRecall(cfg, capture.Event{
+	second := mark(capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{
@@ -1347,7 +1507,7 @@ func TestInitialUserInputRecallStateOnlyMarksFirstSessionInput(t *testing.T) {
 		t.Fatalf("second user_input should stay strict: %#v", second.Metadata)
 	}
 
-	nextSession := r.markInitialUserInputRecall(cfg, capture.Event{
+	nextSession := mark(capture.Event{
 		Target: "codex",
 		Event:  "user_input",
 		Metadata: map[string]string{

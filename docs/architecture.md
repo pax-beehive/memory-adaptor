@@ -334,7 +334,15 @@ For integrations with a native session-start hook, paxm also injects one
 `paxm-session-identity` block containing the configured user ID, configured
 agent ID, and runtime-supplied session ID. This tells the agent its current
 identity without repeating it on every recalled memory; the block is runtime
-context and is not used as memory provenance.
+context and is not used as memory provenance. A separate `paxm-local-time`
+block carries an RFC3339 local timestamp and the local time-zone name. The
+bounded hook session-state module under `internal/capture` records session
+start, user input, and turn end activity. A user input more than 12 hours after
+the preceding activity refreshes the local-time block; an exact 12-hour interval
+does not. State failures remain fail-open and never block the hook. Codex,
+Claude Code, and Pi forward native session-start events. OpenCode performs the
+same bootstrap lazily before its first chat message because its integration does
+not expose the same hook shape.
 
 The queue is a SQLite WAL-backed event log partitioned by agent session. Hook
 callers acknowledge after the event transaction commits; they do not wait for a

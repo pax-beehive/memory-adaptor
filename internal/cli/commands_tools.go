@@ -31,7 +31,7 @@ func (r runner) executeHook(event capture.Event, jsonOut, codexNative bool) erro
 	if err != nil {
 		return err
 	}
-	return r.writeHookResult(result, jsonOut, codexNative)
+	return r.writeHookResult(result, jsonOut, codexNative, "")
 }
 
 func (r runner) runToolCommand(command string, args []string) error {

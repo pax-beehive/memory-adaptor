@@ -26,28 +26,46 @@ type Handler struct {
 	SourceOwner   string
 	Recall        RecallPolicy
 	MarkInitial   func(Event) (Event, error)
+	SessionState  *SessionState
+	Now           func() time.Time
 	Buffer        func(Event) error
 	ObserveRecall func(Event, Result, time.Duration, error)
 }
 
 type Outcome struct {
-	Event       Event
-	Result      *Result
-	Ignored     bool
-	BufferError error
+	Event            Event
+	Result           *Result
+	Ignored          bool
+	BufferError      error
+	ActivityError    error
+	RefreshLocalTime bool
+	ContextTime      time.Time
 }
 
 func (h Handler) Handle(ctx context.Context, event Event) (Outcome, error) {
 	if !SourceAllowed(h.Config, event, h.SourceOwner) {
 		return Outcome{Event: event, Ignored: true}, nil
 	}
-	if InitialRecallEnabled(h.Config, event) && h.MarkInitial != nil {
-		marked, err := h.MarkInitial(event)
+	now := time.Now()
+	if h.Now != nil {
+		now = h.Now()
+	}
+	if InitialRecallEnabled(h.Config, event) && (h.SessionState != nil || h.MarkInitial != nil) {
+		marked := event
+		var err error
+		if h.SessionState != nil {
+			marked, err = h.SessionState.MarkInitial(event, now)
+		} else {
+			marked, err = h.MarkInitial(event)
+		}
 		if err == nil {
 			event = marked
 		}
 	}
-	outcome := Outcome{Event: event}
+	outcome := Outcome{Event: event, ContextTime: now}
+	if h.SessionState != nil {
+		outcome.RefreshLocalTime, outcome.ActivityError = h.SessionState.Observe(event, now)
+	}
 	if WriteEnabled(h.Config, event) && h.Buffer != nil {
 		outcome.BufferError = h.Buffer(event)
 	}

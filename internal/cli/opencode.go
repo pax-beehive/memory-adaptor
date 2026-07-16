@@ -31,28 +31,32 @@ func openCodePluginPath() string {
 }
 
 func installOpenCodeGlobalHook(path string, scriptPaths map[string]string) error {
+	sessionStartScriptPath := strings.TrimSpace(scriptPaths["session_start"])
 	userInputScriptPath := strings.TrimSpace(scriptPaths["user_input"])
 	turnEndScriptPath := strings.TrimSpace(scriptPaths["turn_end"])
-	if userInputScriptPath == "" && turnEndScriptPath == "" {
+	if sessionStartScriptPath == "" && userInputScriptPath == "" && turnEndScriptPath == "" {
 		return errors.New("OpenCode plugin requires at least one hook shim")
 	}
 	path = config.ExpandPath(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(openCodePluginSource(userInputScriptPath, turnEndScriptPath)), 0o600)
+	return os.WriteFile(path, []byte(openCodePluginSource(sessionStartScriptPath, userInputScriptPath, turnEndScriptPath)), 0o600)
 }
 
-func openCodePluginSource(userInputScriptPath, turnEndScriptPath string) string {
+func openCodePluginSource(sessionStartScriptPath, userInputScriptPath, turnEndScriptPath string) string {
+	sessionStartScriptLiteral := jsonStringLiteral(config.ExpandPath(sessionStartScriptPath))
 	userInputScriptLiteral := jsonStringLiteral(config.ExpandPath(userInputScriptPath))
 	turnEndScriptLiteral := jsonStringLiteral(config.ExpandPath(turnEndScriptPath))
 	return `import type { Plugin } from "@opencode-ai/plugin";
 import { spawnSync } from "node:child_process";
 
+const paxmSessionStartHookCommand = ` + sessionStartScriptLiteral + `;
 const paxmUserInputHookCommand = ` + userInputScriptLiteral + `;
 const paxmTurnEndHookCommand = ` + turnEndScriptLiteral + `;
 const pendingRecall = new Map<string, string>();
 const lastFlushedMessage = new Map<string, string>();
+const startedSessions = new Set<string>();
 
 type OpenCodePart = {
   id?: string;
@@ -109,7 +113,11 @@ function formatRecall(raw: string): string {
   if (raw.trim() === "") return "";
   try {
     const result = JSON.parse(raw);
-    if (result?.skipped || !Array.isArray(result?.recall?.hits) || result.recall.hits.length === 0) return "";
+	const contexts: string[] = [];
+	if (typeof result?.additional_context === "string" && result.additional_context.trim() !== "") {
+	  contexts.push(result.additional_context.trim());
+	}
+	if (result?.skipped || !Array.isArray(result?.recall?.hits) || result.recall.hits.length === 0) return contexts.join("\n\n");
     const lines = ["Relevant memory recalled by paxm:"];
     for (const hit of result.recall.hits) {
       const text = escapeRecallText(String(hit?.text ?? "").trim());
@@ -118,12 +126,11 @@ function formatRecall(raw: string): string {
       const score = typeof hit?.score === "number" ? hit.score.toFixed(4) : "n/a";
       lines.push(` + "`- [${provider} score=${score}] ${text}`" + `);
     }
-    return lines.length > 1
-      ? '<paxm-recall version="1" mode="passive">\n' + lines.join("\n") + '\n</paxm-recall>'
-      : "";
+	if (lines.length > 1) contexts.push('<paxm-recall version="1" mode="passive">\n' + lines.join("\n") + '\n</paxm-recall>');
+	return contexts.join("\n\n");
   } catch {
     const text = escapeRecallText(raw.trim());
-    if (text === "" || text.includes("<paxm-recall")) return text;
+    if (text === "" || text.includes("<paxm-recall") || text.includes("<paxm-local-time") || text.includes("<paxm-session-identity")) return text;
     return '<paxm-recall version="1" mode="passive">\n' + text + '\n</paxm-recall>';
   }
 }
@@ -145,10 +152,28 @@ function injectRecall(messages: Array<{ info: any; parts: OpenCodePart[] }>): vo
 
 export const PaxmPlugin: Plugin = async ({ client, directory, worktree }) => ({
   "chat.message": async (input, output) => {
-    if (paxmUserInputHookCommand === "") return;
     const prompt = partText(output.parts as OpenCodePart[]);
     if (prompt === "") return;
     const workspace = worktree || directory;
+    const contexts: string[] = [];
+    if (!startedSessions.has(input.sessionID)) {
+      startedSessions.add(input.sessionID);
+      const started = runHook(paxmSessionStartHookCommand, {
+        schema_version: "paxm.opencode.session_start.v1",
+        target: "opencode",
+        event: "session_start",
+        agent: "opencode",
+        session_id: input.sessionID,
+        cwd: directory,
+        workspace,
+        source: "opencode",
+      });
+      if (started.ok && started.stdout.trim() !== "") contexts.push(started.stdout.trim());
+    }
+    if (paxmUserInputHookCommand === "") {
+      if (contexts.length > 0) pendingRecall.set(input.sessionID, contexts.join("\n\n"));
+      return;
+    }
     const payload = {
       schema_version: "paxm.opencode.user_input.v1",
       target: "opencode",
@@ -161,9 +186,11 @@ export const PaxmPlugin: Plugin = async ({ client, directory, worktree }) => ({
       source: "opencode",
     };
     const result = runHook(paxmUserInputHookCommand, payload);
-    if (!result.ok) return;
-    const recall = formatRecall(result.stdout);
-    if (recall !== "") pendingRecall.set(input.sessionID, recall);
+    if (result.ok) {
+      const recall = formatRecall(result.stdout);
+      if (recall !== "") contexts.push(recall);
+    }
+    if (contexts.length > 0) pendingRecall.set(input.sessionID, contexts.join("\n\n"));
   },
 
   "experimental.chat.messages.transform": async (_input, output) => {
