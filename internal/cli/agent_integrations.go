@@ -230,6 +230,31 @@ func uninstallAgentMCP(configPath, agent string) error {
 	return updateStandardMCP(path, configPath, agent, true)
 }
 
+func preflightAgentMCP(agent string) error {
+	path := agentMCPPath(agent)
+	if path == "" {
+		return nil
+	}
+	root, _, err := readJSONConfig(path)
+	if err != nil {
+		return err
+	}
+	if agent == "zcode" {
+		mcp, decodeErr := rawObject(root["mcp"])
+		if decodeErr != nil {
+			return fmt.Errorf("decode ZCode MCP config %s: %w", path, decodeErr)
+		}
+		if _, decodeErr = rawObject(mcp["servers"]); decodeErr != nil {
+			return fmt.Errorf("decode ZCode MCP servers %s: %w", path, decodeErr)
+		}
+		return nil
+	}
+	if _, err := rawObject(root["mcpServers"]); err != nil {
+		return fmt.Errorf("decode MCP servers %s: %w", path, err)
+	}
+	return nil
+}
+
 func agentMCPPath(agent string) string {
 	switch agent {
 	case "cursor":

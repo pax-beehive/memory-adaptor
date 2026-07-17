@@ -53,6 +53,9 @@ func (r runner) runSetup(args []string) error {
 		return err
 	}
 	cfg, selectedHooks := selection.cfg, selection.selectedHooks
+	if err := preflightSelectedHookIntegrations(path, cfg, selectedHooks); err != nil {
+		return err
+	}
 	zepUserResult, err := r.maybeEnsureZepUser(context.Background(), cfg)
 	if err != nil {
 		return err
@@ -72,6 +75,21 @@ func (r runner) runSetup(args []string) error {
 		_, _ = fmt.Fprintf(r.stdout, "ensured Zep user: %s (%s)\n", zepUserResult.UserID, status)
 	}
 	return r.installSelectedHookIntegrations(path, cfg, selectedHooks)
+}
+
+func preflightSelectedHookIntegrations(path string, cfg config.Config, selectedHooks map[string]bool) error {
+	for _, name := range sortedSelected(selectedHooks) {
+		if !selectedHooks[name] || !isRequestedAgent(name) {
+			continue
+		}
+		if err := preflightRequestedNativeHooks(name, hookInstallEventsForNamedAgent(name, cfg.Agents[name])); err != nil {
+			return fmt.Errorf("preflight %s integration: %w", name, err)
+		}
+		if err := preflightAgentMCP(name); err != nil {
+			return fmt.Errorf("preflight %s MCP integration: %w", name, err)
+		}
+	}
+	return nil
 }
 
 type setupSelection struct {
@@ -384,6 +402,9 @@ func (r runner) installAgentHookIntegration(path string, agent config.AgentConfi
 	if isRequestedAgent(name) {
 		if err := preflightRequestedNativeHooks(name, hookInstallEventsForNamedAgent(name, agent)); err != nil {
 			return fmt.Errorf("preflight %s integration: %w", name, err)
+		}
+		if err := preflightAgentMCP(name); err != nil {
+			return fmt.Errorf("preflight %s MCP integration: %w", name, err)
 		}
 	}
 	if err := removeLegacyHookShim(path, name); err != nil {

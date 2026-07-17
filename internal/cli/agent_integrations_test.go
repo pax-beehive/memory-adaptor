@@ -277,6 +277,83 @@ func TestZCodeDisabledHooksFailBeforeReset(t *testing.T) {
 	}
 }
 
+func TestRequestedAgentMCPPreflightAvoidsReset(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "paxm", "config.yaml")
+	paths := integrationTestPaths(t, dir)
+	if err := os.MkdirAll(filepath.Dir(paths.cursorHooks), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalHooks := []byte(`{"version":1,"hooks":{"sessionStart":[{"command":"keep-cursor-hook"}]}}`)
+	if err := os.WriteFile(paths.cursorHooks, originalHooks, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.cursorMCP), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.cursorMCP, []byte(`{"mcpServers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig(configPath)
+	agent := cfg.Agents["cursor"]
+	agent.Enabled = true
+	cfg.Agents["cursor"] = agent
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	r := runner{stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	err := r.installAgentHookIntegration(configPath, agent, "cursor")
+	if err == nil || !strings.Contains(err.Error(), "MCP") {
+		t.Fatalf("installAgentHookIntegration() error = %v", err)
+	}
+	after, err := os.ReadFile(paths.cursorHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, originalHooks) {
+		t.Fatalf("Cursor hooks changed before MCP preflight: %s", after)
+	}
+}
+
+func TestSetupPreflightFailureLeavesPaxmConfigUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "paxm", "config.yaml")
+	paths := integrationTestPaths(t, dir)
+	cfg := config.DefaultConfig(configPath)
+	codex := cfg.Agents["codex"]
+	codex.Enabled = false
+	cfg.Agents["codex"] = codex
+	cursor := cfg.Agents["cursor"]
+	cursor.Enabled = true
+	cursor.PassiveWriteStartedAt = "2026-01-01T00:00:00Z"
+	cfg.Agents["cursor"] = cursor
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.cursorMCP), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.cursorMCP, []byte(`{"mcpServers":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"--config", configPath, "setup", "--force", "--yes"}, nil, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "preflight cursor MCP integration") {
+		t.Fatalf("setup code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("paxm config changed despite preflight failure:\n%s", after)
+	}
+}
+
 func TestNativeClientHomeOverrides(t *testing.T) {
 	kimiHome := filepath.Join(t.TempDir(), "kimi-home")
 	clineHome := filepath.Join(t.TempDir(), "cline-hooks")

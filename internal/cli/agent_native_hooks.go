@@ -67,12 +67,20 @@ func installRequestedNativeHooks(name string, scripts map[string]string) (string
 
 func preflightRequestedNativeHooks(name string, events []hookInstallEvent) error {
 	switch name {
+	case "cursor":
+		return preflightCursorHooks(cursorHooksPath())
+	case "trae":
+		return preflightClaudeCompatibleHooks(traeHooksPath())
+	case "trae-cn":
+		return preflightClaudeCompatibleHooks(traeCNHooksPath())
+	case "kimi":
+		return preflightKimiHooks(kimiConfigPath())
 	case "zcode":
 		root, _, err := readJSONConfig(zcodeConfigPath())
 		if err != nil {
 			return err
 		}
-		return rejectDisabledZCodeHooks(root, zcodeConfigPath())
+		return preflightZCodeHooks(root, zcodeConfigPath())
 	case "kiro":
 		return preflightKiroAgent(kiroAgentPath())
 	case "cline":
@@ -84,6 +92,62 @@ func preflightRequestedNativeHooks(name string, events []hookInstallEvent) error
 	default:
 		return nil
 	}
+}
+
+func preflightCursorHooks(path string) error {
+	root, _, err := readJSONConfig(path)
+	if err != nil {
+		return err
+	}
+	hooks, err := rawObject(root["hooks"])
+	if err != nil {
+		return fmt.Errorf("decode Cursor hooks %s: %w", path, err)
+	}
+	for event, raw := range hooks {
+		if _, err := rawArray(raw); err != nil {
+			return fmt.Errorf("decode Cursor %s hooks: %w", event, err)
+		}
+	}
+	return nil
+}
+
+func preflightClaudeCompatibleHooks(path string) error {
+	root, _, err := readJSONConfig(path)
+	if err != nil {
+		return err
+	}
+	rawHooks := root["hooks"]
+	if len(bytes.TrimSpace(rawHooks)) == 0 || bytes.Equal(bytes.TrimSpace(rawHooks), []byte("null")) {
+		return nil
+	}
+	var hooks map[string][]json.RawMessage
+	if err := json.Unmarshal(rawHooks, &hooks); err != nil {
+		return fmt.Errorf("decode hooks %s: %w", path, err)
+	}
+	for _, groups := range hooks {
+		for _, group := range groups {
+			if _, _, _, err := removeClaudeHookGroupHandlers(group, "__paxm_preflight__"); err != nil {
+				return fmt.Errorf("decode hook group %s: %w", path, err)
+			}
+		}
+	}
+	return nil
+}
+
+func preflightKimiHooks(path string) error {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	start := bytes.Contains(content, []byte("# >>> paxm managed kimi hooks >>>"))
+	end := bytes.Contains(content, []byte("# <<< paxm managed kimi hooks <<<"))
+	if start != end {
+		return fmt.Errorf("Kimi paxm hook block is incomplete in %s", path)
+	}
+	return nil
 }
 
 func installTraeHooks(path string, scripts map[string]string) error {
@@ -274,6 +338,26 @@ func rejectDisabledZCodeHooks(root map[string]json.RawMessage, path string) erro
 	}
 	if !enabled {
 		return fmt.Errorf("ZCode hooks are disabled in %s; enable hooks before installing paxm", path)
+	}
+	return nil
+}
+
+func preflightZCodeHooks(root map[string]json.RawMessage, path string) error {
+	if err := rejectDisabledZCodeHooks(root, path); err != nil {
+		return err
+	}
+	hooks, err := rawObject(root["hooks"])
+	if err != nil {
+		return fmt.Errorf("decode ZCode hooks %s: %w", path, err)
+	}
+	events, err := rawObject(hooks["events"])
+	if err != nil {
+		return fmt.Errorf("decode ZCode hook events %s: %w", path, err)
+	}
+	for event, raw := range events {
+		if _, err := rawArray(raw); err != nil {
+			return fmt.Errorf("decode ZCode %s hooks: %w", event, err)
+		}
 	}
 	return nil
 }
