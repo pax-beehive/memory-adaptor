@@ -658,9 +658,13 @@ the runtime-supplied session ID once as session identity, plus the current
 RFC3339 local time and time-zone name. On later user inputs, paxm refreshes the
 local-time context when the preceding session activity is more than 12 hours
 old. This bootstrap does not replace the origin metadata stored on individual
-memories. Codex, Claude Code, Pi, Cursor, TRAE, TRAE CN, Kimi Code, ZCode,
-Kiro, and Cline use their native session/task-start events; OpenCode performs
-the bootstrap before the first message in a new session.
+memories. Codex, Claude Code, Pi, Cursor, TRAE, TRAE CN, ZCode, Kiro, and Cline
+emit the bootstrap from their native session/task-start events; OpenCode
+performs it before the first message in a new session. Kimi Code records
+`SessionStart` but delivers the bootstrap on the first `UserPromptSubmit`
+because its session-start event is observation-only. Current Cursor builds may
+accept but drop `sessionStart` context because of a host-side race; see the
+[agent integration matrix](agent-integrations.md).
 Passive writes resolve it from the hook target. Start MCP with
 `paxm mcp serve --agent <name>` to attach the corresponding configured identity
 to explicit MCP writes. The MCP tool itself cannot supply an arbitrary user or

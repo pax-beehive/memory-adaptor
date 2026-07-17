@@ -52,8 +52,10 @@ func nativeHookBindings(name string) []nativeHookBinding {
 	case "cline":
 		return []nativeHookBinding{
 			{ConfigEvent: "session_start", NativeEvent: "TaskStart"},
+			{ConfigEvent: "session_start", NativeEvent: "TaskResume"},
 			{ConfigEvent: "user_input", NativeEvent: "UserPromptSubmit"},
 			{ConfigEvent: "turn_end", NativeEvent: "TaskComplete"},
+			{ConfigEvent: "turn_end", NativeEvent: "TaskCancel"},
 		}
 	case "trae", "trae-cn", "kimi", "zcode":
 		return []nativeHookBinding{
@@ -115,13 +117,31 @@ func cursorHooksPath() string { return integrationPath("PAXM_CURSOR_HOOKS", ".cu
 func cursorMCPPath() string   { return integrationPath("PAXM_CURSOR_MCP", ".cursor", "mcp.json") }
 func traeHooksPath() string   { return integrationPath("PAXM_TRAE_HOOKS", ".trae", "hooks.json") }
 func traeCNHooksPath() string { return integrationPath("PAXM_TRAE_CN_HOOKS", ".trae-cn", "hooks.json") }
-func kimiConfigPath() string  { return integrationPath("PAXM_KIMI_CONFIG", ".kimi-code", "config.toml") }
-func kimiMCPPath() string     { return integrationPath("PAXM_KIMI_MCP", ".kimi-code", "mcp.json") }
+func kimiConfigPath() string  { return kimiPath("PAXM_KIMI_CONFIG", "config.toml") }
+func kimiMCPPath() string     { return kimiPath("PAXM_KIMI_MCP", "mcp.json") }
 func kiroAgentPath() string {
 	return integrationPath("PAXM_KIRO_AGENT", ".kiro", "agents", "paxm.json")
 }
-func kiroMCPPath() string   { return integrationPath("PAXM_KIRO_MCP", ".kiro", "settings", "mcp.json") }
-func clineHooksDir() string { return integrationPath("PAXM_CLINE_HOOKS_DIR", ".cline", "hooks") }
+func kiroMCPPath() string { return integrationPath("PAXM_KIRO_MCP", ".kiro", "settings", "mcp.json") }
+func clineHooksDir() string {
+	if path := strings.TrimSpace(os.Getenv("PAXM_CLINE_HOOKS_DIR")); path != "" {
+		return config.ExpandPath(path)
+	}
+	if path := strings.TrimSpace(os.Getenv("CLINE_HOOKS_DIR")); path != "" {
+		return config.ExpandPath(path)
+	}
+	return integrationPath("PAXM_CLINE_HOOKS_DIR", ".cline", "hooks")
+}
+
+func kimiPath(override, filename string) string {
+	if path := strings.TrimSpace(os.Getenv(override)); path != "" {
+		return config.ExpandPath(path)
+	}
+	if home := strings.TrimSpace(os.Getenv("KIMI_CODE_HOME")); home != "" {
+		return filepath.Join(config.ExpandPath(home), filename)
+	}
+	return integrationPath(override, ".kimi-code", filename)
+}
 
 func clineMCPPath() string {
 	if path := strings.TrimSpace(os.Getenv("PAXM_CLINE_MCP")); path != "" {

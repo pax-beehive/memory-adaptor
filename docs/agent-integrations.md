@@ -15,12 +15,23 @@ adapters used by the CLI.
 | Kimi Code | MCP | `UserPromptSubmit` | `SessionStart` + `UserPromptSubmit` + `Stop` |
 | ZCode | MCP | `UserPromptSubmit` | `SessionStart` + `UserPromptSubmit` + `Stop` |
 | Kiro | MCP | `userPromptSubmit` in the `paxm` agent | `agentSpawn` + `userPromptSubmit` + `stop` in the `paxm` agent |
-| Cline | MCP | `UserPromptSubmit` | `TaskStart` + `UserPromptSubmit` + `TaskComplete` |
+| Cline | MCP | `UserPromptSubmit` | `TaskStart`/`TaskResume` + `UserPromptSubmit` + `TaskComplete`/`TaskCancel` |
 
 Cursor's `beforeSubmitPrompt` output contract can allow or block a prompt but
 does not inject prompt-specific context. Paxm therefore registers the MCP
 server for explicit Cursor recall and uses hooks for passive capture. It does
 not claim prompt-time passive recall where the host cannot deliver it.
+
+Cursor documents `additional_context` for `sessionStart`, so paxm emits the
+documented session identity/local-time output there. Current Cursor builds have
+a confirmed host race that can drop that context after accepting the hook
+output. Treat Cursor MCP recall as the reliable path until the host fix ships;
+the session hook remains installed so it starts working without another paxm
+upgrade when Cursor fixes the delivery path.
+
+Kimi Code treats `SessionStart` as observation-only. Paxm still records that
+event, then delivers the session identity/local time together with initial
+recall from the first `UserPromptSubmit`, whose stdout is appended to context.
 
 Cline's `TaskComplete` payload does not include the final assistant response.
 Paxm durably captures the task and user-prompt lifecycle that Cline exposes,
@@ -39,7 +50,7 @@ It preserves unrelated servers, hooks, settings, and top-level JSON fields.
 | Kimi Code | `~/.kimi-code/config.toml` | `~/.kimi-code/mcp.json` |
 | ZCode | `~/.zcode/cli/config.json` | same file, under `mcp.servers.paxm` |
 | Kiro | `~/.kiro/agents/paxm.json` | `~/.kiro/settings/mcp.json` |
-| Cline | `~/.cline/hooks/{TaskStart,UserPromptSubmit,TaskComplete}` | `~/.cline/data/settings/cline_mcp_settings.json` |
+| Cline | `~/.cline/hooks/{TaskStart,TaskResume,UserPromptSubmit,TaskComplete,TaskCancel}` (`.ps1` suffix on Windows) | `~/.cline/data/settings/cline_mcp_settings.json` |
 
 Kiro lifecycle hooks belong to the generated custom agent. Start it with:
 
@@ -52,7 +63,13 @@ The global Kiro MCP entry remains available to agents that include user-level
 
 Cline allows one executable at each global hook filename. If a requested hook
 file already exists and is not paxm-managed, setup stops with an error instead
-of overwriting it. Move or compose that hook explicitly, then rerun setup.
+of overwriting it. The collision check runs before paxm removes an older
+integration or writes any new hook, so the existing setup stays intact. Move or
+compose that hook explicitly, then rerun setup.
+
+If ZCode has `hooks.enabled: false`, setup stops instead of turning hooks on and
+accidentally activating unrelated commands. Enable ZCode hooks explicitly, then
+rerun setup.
 
 Tests and managed deployments can override paths with:
 
@@ -64,7 +81,9 @@ Tests and managed deployments can override paths with:
 - `PAXM_KIRO_AGENT`, `PAXM_KIRO_MCP`
 - `PAXM_CLINE_HOOKS_DIR`, `PAXM_CLINE_MCP`
 
-`CLINE_DATA_DIR` is also honored when `PAXM_CLINE_MCP` is unset.
+The clients' native relocation variables are also honored: `KIMI_CODE_HOME`
+for both Kimi files, `CLINE_HOOKS_DIR` for Cline hooks, and `CLINE_DATA_DIR` for
+Cline MCP config. A `PAXM_*` override takes precedence.
 
 ## Install, verify, disable, and roll back
 

@@ -42,7 +42,7 @@ func TestRequestedAgentLabelsAliasesAndEvents(t *testing.T) {
 	wantEvents := map[string][]string{
 		"cursor": {"sessionStart", "beforeSubmitPrompt", "afterAgentResponse"},
 		"kiro":   {"agentSpawn", "userPromptSubmit", "stop"},
-		"cline":  {"TaskStart", "UserPromptSubmit", "TaskComplete"},
+		"cline":  {"TaskStart", "TaskResume", "UserPromptSubmit", "TaskComplete", "TaskCancel"},
 		"kimi":   {"SessionStart", "UserPromptSubmit", "Stop"},
 	}
 	for name, want := range wantEvents {
@@ -108,13 +108,17 @@ func TestRequestedAgentInstallAndUninstallPreserveForeignConfig(t *testing.T) {
 		assertFileContains(t, path, `"paxm"`, `"--agent"`, name)
 	}
 	assertFileContains(t, paths.cursorHooks, "keep-cursor", "beforeSubmitPrompt", "cursor-user_input")
-	assertFileContains(t, paths.traeHooks, "keep-trae", "UserPromptSubmit", "trae-user_input")
-	assertFileContains(t, paths.traeCNHooks, "trae-cn-user_input")
+	assertFileContains(t, paths.traeHooks, "keep-trae", "UserPromptSubmit", "trae-user_input", `"version": 1`)
+	assertFileContains(t, paths.traeCNHooks, "trae-cn-user_input", `"version": 1`)
 	assertFileContains(t, paths.kimiConfig, `event = "UserPromptSubmit"`, "kimi-user_input")
+	assertFileContains(t, filepath.Join(filepath.Dir(configPath), "hooks", "kimi-user_input"), "--kimi")
 	assertFileContains(t, paths.kiroAgent, `"userPromptSubmit"`, "kiro-user_input", `"includeMcpJson": true`)
 	assertFileContains(t, filepath.Join(paths.clineHooks, "UserPromptSubmit"), "cline-user_input")
 	assertFileContains(t, filepath.Join(filepath.Dir(configPath), "hooks", "cline-user_input"), "--cline")
+	assertFileContains(t, filepath.Join(paths.clineHooks, "TaskResume"), "cline-session_start")
+	assertFileContains(t, filepath.Join(paths.clineHooks, "TaskCancel"), "cline-turn_end")
 	assertFileContains(t, paths.zcodeConfig, "keep-zcode", `"paxm"`, "zcode-user_input")
+	assertFileContains(t, filepath.Join(filepath.Dir(configPath), "hooks", "zcode-user_input"), "--zcode")
 
 	for _, name := range requestedAgentNames() {
 		if err := uninstallAgentIntegration(configPath, name); err != nil {
@@ -132,6 +136,11 @@ func TestRequestedAgentInstallAndUninstallPreserveForeignConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(paths.clineHooks, "UserPromptSubmit")); !os.IsNotExist(err) {
 		t.Fatalf("Cline paxm hook still exists, err=%v", err)
+	}
+	for _, event := range []string{"TaskStart", "TaskResume", "TaskComplete", "TaskCancel"} {
+		if _, err := os.Stat(filepath.Join(paths.clineHooks, event)); !os.IsNotExist(err) {
+			t.Fatalf("Cline %s hook still exists, err=%v", event, err)
+		}
 	}
 }
 
@@ -197,6 +206,120 @@ func TestCursorBeforeSubmitOutputDoesNotClaimContextInjection(t *testing.T) {
 	}
 	if _, ok := got["additional_context"]; ok {
 		t.Fatalf("Cursor beforeSubmitPrompt output claimed unsupported context injection: %#v", got)
+	}
+}
+
+func TestZCodeHookOutputIsStrictNativeJSON(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeZCodeHookOutput(&output, capture.Result{Target: "zcode", Event: "user_input"}, "remembered context"); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["additionalContext"] != "remembered context" {
+		t.Fatalf("ZCode hook output = %#v", got)
+	}
+}
+
+func TestClinePreflightAvoidsPartialInstall(t *testing.T) {
+	dir := t.TempDir()
+	foreign := filepath.Join(dir, "UserPromptSubmit")
+	if err := os.WriteFile(foreign, []byte("#!/bin/sh\nforeign\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := installClineHooks(dir, map[string]string{
+		"session_start": "/tmp/cline-session_start",
+		"user_input":    "/tmp/cline-user_input",
+		"turn_end":      "/tmp/cline-turn_end",
+	})
+	if err == nil || !strings.Contains(err.Error(), "will not overwrite") {
+		t.Fatalf("installClineHooks() error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "TaskStart")); !os.IsNotExist(statErr) {
+		t.Fatalf("TaskStart was written before collision preflight, err=%v", statErr)
+	}
+}
+
+func TestZCodeDisabledHooksFailBeforeReset(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "paxm", "config.yaml")
+	paths := integrationTestPaths(t, dir)
+	if err := os.MkdirAll(filepath.Dir(paths.zcodeConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"hooks":{"enabled":false,"events":{"Stop":[{"hooks":[{"type":"command","command":"keep-disabled"}]}]}},"mcp":{"servers":{"paxm":{"command":"keep-paxm"}}}}`)
+	if err := os.WriteFile(paths.zcodeConfig, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig(configPath)
+	agent := cfg.Agents["zcode"]
+	agent.Enabled = true
+	cfg.Agents["zcode"] = agent
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	r := runner{stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	err := r.installAgentHookIntegration(configPath, agent, "zcode")
+	if err == nil || !strings.Contains(err.Error(), "hooks are disabled") {
+		t.Fatalf("installAgentHookIntegration() error = %v", err)
+	}
+	after, err := os.ReadFile(paths.zcodeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("disabled ZCode config changed before preflight: %s", after)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(configPath), "hooks", "zcode-session_start")); !os.IsNotExist(statErr) {
+		t.Fatalf("ZCode shim written before preflight, err=%v", statErr)
+	}
+}
+
+func TestNativeClientHomeOverrides(t *testing.T) {
+	kimiHome := filepath.Join(t.TempDir(), "kimi-home")
+	clineHome := filepath.Join(t.TempDir(), "cline-hooks")
+	t.Setenv("PAXM_KIMI_CONFIG", "")
+	t.Setenv("PAXM_KIMI_MCP", "")
+	t.Setenv("KIMI_CODE_HOME", kimiHome)
+	t.Setenv("PAXM_CLINE_HOOKS_DIR", "")
+	t.Setenv("CLINE_HOOKS_DIR", clineHome)
+	if got := kimiConfigPath(); got != filepath.Join(kimiHome, "config.toml") {
+		t.Fatalf("kimiConfigPath() = %q", got)
+	}
+	if got := kimiMCPPath(); got != filepath.Join(kimiHome, "mcp.json") {
+		t.Fatalf("kimiMCPPath() = %q", got)
+	}
+	if got := clineHooksDir(); got != clineHome {
+		t.Fatalf("clineHooksDir() = %q", got)
+	}
+}
+
+func TestWindowsHookScriptsUsePowerShell(t *testing.T) {
+	if got := clineHookFilename("windows", "TaskStart"); got != "TaskStart.ps1" {
+		t.Fatalf("clineHookFilename() = %q", got)
+	}
+	clineScript := clineHookScript("windows", `C:\paxm\hooks\cline-session_start.ps1`)
+	if !strings.Contains(clineScript, "# managed by paxm") || !strings.Contains(clineScript, "& 'C:\\paxm\\hooks") {
+		t.Fatalf("Cline PowerShell hook = %q", clineScript)
+	}
+	extension, shim := hookShimScript("windows", `C:\bin\paxm.exe`, `C:\paxm\config.yaml`, "cline", "user_input", " --cline")
+	if extension != ".ps1" || !strings.Contains(shim, "--cline") || !strings.Contains(shim, "exit 0") {
+		t.Fatalf("Windows hook shim = %q, %q", extension, shim)
+	}
+	command := nativeHookCommandForOS("windows", `C:\paxm\hooks\cline-user_input.ps1`)
+	if !strings.Contains(command, "powershell.exe") || !strings.Contains(command, "-File") {
+		t.Fatalf("Windows native hook command = %q", command)
+	}
+}
+
+func TestRemoveKimiManagedBlockPreservesConfigOnBothSides(t *testing.T) {
+	content := "theme = \"dark\"\n# >>> paxm managed kimi hooks >>>\n[[hooks]]\nevent = \"UserPromptSubmit\"\n# <<< paxm managed kimi hooks <<<\n[ui]\nlanguage = \"en\"\n"
+	want := "theme = \"dark\"\n[ui]\nlanguage = \"en\"\n"
+	got, changed := removeKimiManagedBlock(content)
+	if !changed || got != want {
+		t.Fatalf("removeKimiManagedBlock() = %q, %t; want %q, true", got, changed, want)
 	}
 }
 

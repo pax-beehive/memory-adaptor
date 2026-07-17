@@ -63,6 +63,10 @@ type cursorHookOutput struct {
 	AdditionalContext string `json:"additional_context,omitempty"`
 }
 
+type zcodeHookOutput struct {
+	AdditionalContext string `json:"additionalContext,omitempty"`
+}
+
 func writeClineHookOutput(w io.Writer, result capture.Result, supplemental string) error {
 	return writeJSON(w, clineHookOutput{
 		ContextModification: hookContext(result, supplemental),
@@ -78,6 +82,10 @@ func writeCursorHookOutput(w io.Writer, result capture.Result, supplemental stri
 		Continue:          true,
 		AdditionalContext: context,
 	})
+}
+
+func writeZCodeHookOutput(w io.Writer, result capture.Result, supplemental string) error {
+	return writeJSON(w, zcodeHookOutput{AdditionalContext: hookContext(result, supplemental)})
 }
 
 func hookContext(result capture.Result, supplemental string) string {
@@ -189,6 +197,8 @@ type hookOutputMode struct {
 	json   bool
 	cline  bool
 	cursor bool
+	zcode  bool
+	kimi   bool
 }
 
 func (r runner) runInternalHook(args []string) error {
@@ -199,6 +209,8 @@ func (r runner) runInternalHook(args []string) error {
 	jsonOut := fs.Bool("json", false, "write JSON recall output")
 	clineOut := fs.Bool("cline", false, "write Cline hook output")
 	cursorOut := fs.Bool("cursor", false, "write Cursor hook output")
+	zcodeOut := fs.Bool("zcode", false, "write ZCode hook output")
+	kimiOut := fs.Bool("kimi", false, "write Kimi Code hook output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -256,6 +268,8 @@ func (r runner) runInternalHook(args []string) error {
 		json:   *jsonOut,
 		cline:  *clineOut,
 		cursor: *cursorOut,
+		zcode:  *zcodeOut,
+		kimi:   *kimiOut,
 	})
 }
 
@@ -269,35 +283,59 @@ func (r runner) writeInternalHookOutcome(cfg config.Config, outcome capture.Outc
 	if outcome.Ignored {
 		return nil
 	}
-	now := outcome.ContextTime
 	if outcome.Event.Event == "session_start" {
-		identity := sessionIdentity(cfg, outcome.Event)
-		if mode.cline || mode.cursor {
-			var contextBuffer bytes.Buffer
-			if bootstrapErr := writeSessionIdentityBootstrapAt(&contextBuffer, outcome.Event.Target, identity, now, false); bootstrapErr != nil {
-				return bootstrapErr
-			}
-			context := strings.TrimSpace(contextBuffer.String())
-			if mode.cline {
-				return writeClineHookOutput(r.stdout, capture.Result{}, context)
-			}
-			return writeCursorHookOutput(r.stdout, capture.Result{}, context, true)
-		}
-		return writeSessionIdentityBootstrapAt(r.stdout, outcome.Event.Target, identity, now, mode.json)
+		return r.writeSessionStartHookOutcome(cfg, outcome, mode)
 	}
 	if outcome.Result == nil {
-		if mode.cline {
-			return writeClineHookOutput(r.stdout, capture.Result{}, "")
-		}
-		if mode.cursor {
-			return writeCursorHookOutput(r.stdout, capture.Result{}, "", false)
-		}
-		return hookErr
+		return r.writeEmptyHookOutcome(hookErr, mode)
 	}
+	return r.writeRecallHookOutcome(cfg, outcome, hookErr, mode)
+}
+
+func (r runner) writeSessionStartHookOutcome(cfg config.Config, outcome capture.Outcome, mode hookOutputMode) error {
+	identity := sessionIdentity(cfg, outcome.Event)
+	if !mode.cline && !mode.cursor && !mode.zcode {
+		return writeSessionIdentityBootstrapAt(r.stdout, outcome.Event.Target, identity, outcome.ContextTime, mode.json)
+	}
+	context, err := sessionBootstrapContext(cfg, outcome.Event, outcome.ContextTime)
+	if err != nil {
+		return err
+	}
+	if mode.cline {
+		return writeClineHookOutput(r.stdout, capture.Result{}, context)
+	}
+	if mode.zcode {
+		return writeZCodeHookOutput(r.stdout, capture.Result{}, context)
+	}
+	return writeCursorHookOutput(r.stdout, capture.Result{}, context, true)
+}
+
+func (r runner) writeEmptyHookOutcome(hookErr error, mode hookOutputMode) error {
+	if mode.cline {
+		return writeClineHookOutput(r.stdout, capture.Result{}, "")
+	}
+	if mode.cursor {
+		return writeCursorHookOutput(r.stdout, capture.Result{}, "", false)
+	}
+	if mode.zcode {
+		return writeZCodeHookOutput(r.stdout, capture.Result{}, "")
+	}
+	return hookErr
+}
+
+func (r runner) writeRecallHookOutcome(cfg config.Config, outcome capture.Outcome, hookErr error, mode hookOutputMode) error {
+	now := outcome.ContextTime
 	codexNative := mode.json && outcome.Event.Target == "codex" && outcome.Event.Event == "user_input"
 	additionalContext := ""
 	if outcome.RefreshLocalTime {
 		additionalContext = localTimeContext(now)
+	}
+	if mode.kimi && outcome.Event.Event == "user_input" && outcome.Event.Metadata[capture.RecallPhaseMetadataKey] == capture.RecallPhaseInitial {
+		initialContext, contextErr := sessionBootstrapContext(cfg, outcome.Event, now)
+		if contextErr != nil {
+			return contextErr
+		}
+		additionalContext = strings.TrimSpace(initialContext + "\n\n" + additionalContext)
 	}
 	if hookErr != nil {
 		_, _ = fmt.Fprintf(r.stderr, "paxm hook recall skipped: %s\n", hookErr)
@@ -311,7 +349,18 @@ func (r runner) writeInternalHookOutcome(cfg config.Config, outcome capture.Outc
 	if mode.cursor {
 		return writeCursorHookOutput(r.stdout, *outcome.Result, additionalContext, outcome.Event.Event != "user_input")
 	}
+	if mode.zcode {
+		return writeZCodeHookOutput(r.stdout, *outcome.Result, additionalContext)
+	}
 	return r.writeHookResult(*outcome.Result, mode.json, codexNative, additionalContext)
+}
+
+func sessionBootstrapContext(cfg config.Config, event capture.Event, now time.Time) (string, error) {
+	var output bytes.Buffer
+	if err := writeSessionIdentityBootstrapAt(&output, event.Target, sessionIdentity(cfg, event), now, false); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output.String()), nil
 }
 
 func (r runner) runHookControl(args []string) error {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -380,6 +381,11 @@ func (r runner) reconcilePluginOwnership(path string, cfg config.Config, name st
 }
 
 func (r runner) installAgentHookIntegration(path string, agent config.AgentConfig, name string) error {
+	if isRequestedAgent(name) {
+		if err := preflightRequestedNativeHooks(name, hookInstallEventsForNamedAgent(name, agent)); err != nil {
+			return fmt.Errorf("preflight %s integration: %w", name, err)
+		}
+	}
 	if err := removeLegacyHookShim(path, name); err != nil {
 		return err
 	}
@@ -2095,14 +2101,19 @@ func installHookShim(configPath, target, event string) (string, error) {
 	scriptPath := filepath.Join(hooksDir, target+"-"+event)
 	outputFlag := " --json"
 	switch target {
-	case "claude", "trae", "trae-cn", "kimi", "zcode", "kiro":
+	case "claude", "trae", "trae-cn", "kiro":
 		outputFlag = ""
+	case "kimi":
+		outputFlag = " --kimi"
 	case "cline":
 		outputFlag = " --cline"
 	case "cursor":
 		outputFlag = " --cursor"
+	case "zcode":
+		outputFlag = " --zcode"
 	}
-	script := "#!/bin/sh\nexec " + shellQuote(binaryPath) + " --config " + shellQuote(config.ExpandPath(configPath)) + " __hook --target " + shellQuote(target) + " --event " + shellQuote(event) + outputFlag + "\n"
+	extension, script := hookShimScript(runtime.GOOS, binaryPath, config.ExpandPath(configPath), target, event, outputFlag)
+	scriptPath += extension
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		return "", err
 	}
@@ -2112,6 +2123,15 @@ func installHookShim(configPath, target, event string) (string, error) {
 		}
 	}
 	return scriptPath, nil
+}
+
+func hookShimScript(goos, binaryPath, configPath, target, event, outputFlag string) (string, string) {
+	if goos == "windows" {
+		script := "& " + powerShellQuote(binaryPath) + " --config " + powerShellQuote(configPath) + " __hook --target " + powerShellQuote(target) + " --event " + powerShellQuote(event) + outputFlag + "\nexit 0\n"
+		return ".ps1", script
+	}
+	script := "#!/bin/sh\n" + shellQuote(binaryPath) + " --config " + shellQuote(configPath) + " __hook --target " + shellQuote(target) + " --event " + shellQuote(event) + outputFlag + " || exit 0\n"
+	return "", script
 }
 
 func codexConfigPath() string {
@@ -2547,7 +2567,7 @@ func installClaudeGlobalHooks(path string, scriptPaths map[string]string) error 
 			continue
 		}
 		hasHook = true
-		command := shellQuote(scriptPath)
+		command := nativeHookCommand(scriptPath)
 		alreadyInstalled := false
 		for _, rawGroup := range hooks[installEvent.NativeEvent] {
 			if claudeHookGroupHasCommand(rawGroup, command, scriptPath) {

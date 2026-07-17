@@ -198,14 +198,18 @@ func removeAgentHookShims(configPath, target string) error {
 	hooksDir := filepath.Join(filepath.Dir(config.ExpandPath(configPath)), "hooks")
 	var errs []error
 	for _, event := range installedHookEvents() {
-		path := filepath.Join(hooksDir, target+"-"+event.ConfigEvent)
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			errs = append(errs, err)
+		base := filepath.Join(hooksDir, target+"-"+event.ConfigEvent)
+		for _, path := range []string{base, base + ".ps1"} {
+			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
 		}
 	}
 	legacyPath := filepath.Join(hooksDir, target+"-user_prompt")
-	if err := os.Remove(legacyPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		errs = append(errs, err)
+	for _, path := range []string{legacyPath, legacyPath + ".ps1"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }

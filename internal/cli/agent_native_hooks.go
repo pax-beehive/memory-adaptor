@@ -8,10 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 const clineManagedMarker = "# managed by paxm"
+const kiroManagedDescription = "Kiro agent with paxm active recall and passive memory hooks."
 
 type cursorHookCommand struct {
 	Command string `json:"command"`
@@ -42,10 +44,10 @@ func installRequestedNativeHooks(name string, scripts map[string]string) (string
 		return path, installCursorHooks(path, scripts)
 	case "trae":
 		path := traeHooksPath()
-		return path, installClaudeGlobalHooks(path, scripts)
+		return path, installTraeHooks(path, scripts)
 	case "trae-cn":
 		path := traeCNHooksPath()
-		return path, installClaudeGlobalHooks(path, scripts)
+		return path, installTraeHooks(path, scripts)
 	case "kimi":
 		path := kimiConfigPath()
 		return path, installKimiHooks(path, scripts)
@@ -61,6 +63,42 @@ func installRequestedNativeHooks(name string, scripts map[string]string) (string
 	default:
 		return "", nil
 	}
+}
+
+func preflightRequestedNativeHooks(name string, events []hookInstallEvent) error {
+	switch name {
+	case "zcode":
+		root, _, err := readJSONConfig(zcodeConfigPath())
+		if err != nil {
+			return err
+		}
+		return rejectDisabledZCodeHooks(root, zcodeConfigPath())
+	case "kiro":
+		return preflightKiroAgent(kiroAgentPath())
+	case "cline":
+		scripts := make(map[string]string, len(events))
+		for _, event := range events {
+			scripts[event.ConfigEvent] = "preflight"
+		}
+		return preflightClineHooks(clineHooksDir(), scripts)
+	default:
+		return nil
+	}
+}
+
+func installTraeHooks(path string, scripts map[string]string) error {
+	if err := installClaudeGlobalHooks(path, scripts); err != nil {
+		return err
+	}
+	root, original, err := readJSONConfig(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := root["version"]; ok {
+		return nil
+	}
+	root["version"] = json.RawMessage("1")
+	return writeJSONConfig(path, original, root)
 }
 
 func uninstallRequestedNativeHooks(name, marker string) error {
@@ -105,7 +143,7 @@ func installCursorHooks(path string, scripts map[string]string) error {
 		if rawArrayContains(commands, scriptPath) {
 			continue
 		}
-		command, marshalErr := json.Marshal(cursorHookCommand{Command: shellQuote(scriptPath), Timeout: 60})
+		command, marshalErr := json.Marshal(cursorHookCommand{Command: nativeHookCommand(scriptPath), Timeout: 60})
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -170,6 +208,9 @@ func installZCodeHooks(path string, scripts map[string]string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectDisabledZCodeHooks(root, path); err != nil {
+		return err
+	}
 	hooks, err := rawObject(root["hooks"])
 	if err != nil {
 		return fmt.Errorf("decode ZCode hooks %s: %w", path, err)
@@ -193,7 +234,7 @@ func installZCodeHooks(path string, scripts map[string]string) error {
 		group := zcodeHookGroup{
 			Matcher: binding.Matcher,
 			Hooks: []zcodeHookCommand{{
-				Command: shellQuote(scriptPath),
+				Command: nativeHookCommand(scriptPath),
 				Type:    "command",
 			}},
 		}
@@ -207,7 +248,6 @@ func installZCodeHooks(path string, scripts map[string]string) error {
 			return err
 		}
 	}
-	hooks["enabled"] = json.RawMessage("true")
 	hooks["events"], err = json.Marshal(events)
 	if err != nil {
 		return err
@@ -217,6 +257,25 @@ func installZCodeHooks(path string, scripts map[string]string) error {
 		return err
 	}
 	return writeJSONConfig(path, original, root)
+}
+
+func rejectDisabledZCodeHooks(root map[string]json.RawMessage, path string) error {
+	hooks, err := rawObject(root["hooks"])
+	if err != nil {
+		return fmt.Errorf("decode ZCode hooks %s: %w", path, err)
+	}
+	raw, ok := hooks["enabled"]
+	if !ok {
+		return nil
+	}
+	var enabled bool
+	if err := json.Unmarshal(raw, &enabled); err != nil {
+		return fmt.Errorf("decode ZCode hooks.enabled %s: %w", path, err)
+	}
+	if !enabled {
+		return fmt.Errorf("ZCode hooks are disabled in %s; enable hooks before installing paxm", path)
+	}
+	return nil
 }
 
 func removeZCodeHooks(path, marker string) error {
@@ -267,9 +326,7 @@ func removeZCodeHooks(path, marker string) error {
 }
 
 func installKiroAgent(path string, scripts map[string]string) error {
-	if original, err := os.ReadFile(path); err == nil && !bytes.Contains(original, []byte("paxm-")) {
-		return fmt.Errorf("Kiro agent %s already exists and is not managed by paxm", path)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := preflightKiroAgent(path); err != nil {
 		return err
 	}
 	hooks := make(map[string][]kiroHookCommand)
@@ -279,7 +336,7 @@ func installKiroAgent(path string, scripts map[string]string) error {
 			continue
 		}
 		hooks[binding.NativeEvent] = []kiroHookCommand{{
-			Command:   shellQuote(scriptPath),
+			Command:   nativeHookCommand(scriptPath),
 			Matcher:   binding.Matcher,
 			TimeoutMS: 60_000,
 		}}
@@ -292,7 +349,7 @@ func installKiroAgent(path string, scripts map[string]string) error {
 		Hooks          map[string][]kiroHookCommand `json:"hooks"`
 	}{
 		Name:           "paxm",
-		Description:    "Kiro agent with paxm active recall and passive memory hooks.",
+		Description:    kiroManagedDescription,
 		Prompt:         "Use the paxm MCP tools when durable memory would help the task.",
 		IncludeMCPJSON: true,
 		Hooks:          hooks,
@@ -307,7 +364,24 @@ func installKiroAgent(path string, scripts map[string]string) error {
 	return os.WriteFile(path, append(encoded, '\n'), 0o600)
 }
 
+func preflightKiroAgent(path string) error {
+	original, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Contains(original, []byte(kiroManagedDescription)) {
+		return fmt.Errorf("Kiro agent %s already exists and is not managed by paxm", path)
+	}
+	return nil
+}
+
 func installClineHooks(dir string, scripts map[string]string) error {
+	if err := preflightClineHooks(dir, scripts); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -316,15 +390,59 @@ func installClineHooks(dir string, scripts map[string]string) error {
 		if scriptPath == "" {
 			continue
 		}
-		path := filepath.Join(dir, binding.NativeEvent)
-		if original, err := os.ReadFile(path); err == nil && !bytes.Contains(original, []byte(clineManagedMarker)) {
-			return fmt.Errorf("Cline hook %s already exists; paxm will not overwrite it", path)
-		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		script := "#!/bin/sh\n" + clineManagedMarker + "\nexec " + shellQuote(scriptPath) + "\n"
+		path := filepath.Join(dir, clineHookFilename(runtime.GOOS, binding.NativeEvent))
+		script := clineHookScript(runtime.GOOS, scriptPath)
 		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func clineHookFilename(goos, event string) string {
+	if goos == "windows" {
+		return event + ".ps1"
+	}
+	return event
+}
+
+func clineHookScript(goos, scriptPath string) string {
+	if goos == "windows" {
+		return clineManagedMarker + "\n& " + powerShellQuote(scriptPath) + "\nexit 0\n"
+	}
+	return "#!/bin/sh\n" + clineManagedMarker + "\n" + shellQuote(scriptPath) + " || exit 0\n"
+}
+
+func nativeHookCommand(scriptPath string) string {
+	return nativeHookCommandForOS(runtime.GOOS, scriptPath)
+}
+
+func nativeHookCommandForOS(goos, scriptPath string) string {
+	if goos == "windows" {
+		return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "` + strings.ReplaceAll(scriptPath, `"`, `\"`) + `"`
+	}
+	return shellQuote(scriptPath)
+}
+
+func powerShellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func preflightClineHooks(dir string, scripts map[string]string) error {
+	for _, binding := range nativeHookBindings("cline") {
+		if scripts != nil && strings.TrimSpace(scripts[binding.ConfigEvent]) == "" {
+			continue
+		}
+		path := filepath.Join(dir, clineHookFilename(runtime.GOOS, binding.NativeEvent))
+		original, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !bytes.Contains(original, []byte(clineManagedMarker)) {
+			return fmt.Errorf("Cline hook %s already exists; paxm will not overwrite it", path)
 		}
 	}
 	return nil
@@ -333,7 +451,7 @@ func installClineHooks(dir string, scripts map[string]string) error {
 func removeClineHooks(dir, marker string) error {
 	var errs []error
 	for _, binding := range nativeHookBindings("cline") {
-		path := filepath.Join(dir, binding.NativeEvent)
+		path := filepath.Join(dir, clineHookFilename(runtime.GOOS, binding.NativeEvent))
 		content, err := os.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -375,7 +493,7 @@ func installKimiHooks(path string, scripts map[string]string) error {
 			block.WriteString("\"\n")
 		}
 		block.WriteString("command = \"")
-		block.WriteString(escapeTomlString(shellQuote(scriptPath)))
+		block.WriteString(escapeTomlString(nativeHookCommand(scriptPath)))
 		block.WriteString("\"\n")
 		block.WriteString("timeout = 60\n\n")
 	}
@@ -417,7 +535,11 @@ func removeKimiManagedBlock(content string) (string, bool) {
 	if endIndex < len(content) && content[endIndex] == '\n' {
 		endIndex++
 	}
-	return strings.TrimRight(content[:startIndex], "\n") + content[endIndex:], true
+	updated := content[:startIndex] + content[endIndex:]
+	if strings.TrimSpace(updated) == "" {
+		updated = ""
+	}
+	return updated, true
 }
 
 func removeOwnedFile(path, marker string) error {
