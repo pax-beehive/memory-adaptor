@@ -48,7 +48,7 @@ func TestRuntimeDoesNotExposeFacadeEscapeHatch(t *testing.T) {
 
 func TestTopLevelCommandsHaveExplicitAudience(t *testing.T) {
 	want := map[string]commandClass{
-		"setup": operatorCommand, "config": operatorCommand, "history": operatorCommand, "logs": operatorCommand, "backfill": operatorCommand, "eval": operatorCommand, "update": operatorCommand, "uninstall": operatorCommand,
+		"setup": operatorCommand, "config": operatorCommand, "history": operatorCommand, "logs": operatorCommand, "dashboard": operatorCommand, "backfill": operatorCommand, "eval": operatorCommand, "update": operatorCommand, "uninstall": operatorCommand,
 		"recall": toolCommand, "remember": toolCommand, "mcp": toolCommand,
 		"__hook": internalCommand, "__hook-daemon": internalCommand, "__hook-control": internalCommand,
 	}

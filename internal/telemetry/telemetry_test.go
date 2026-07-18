@@ -357,3 +357,59 @@ func TestQueryFieldsAvoidPreviewByDefault(t *testing.T) {
 		t.Fatalf("unexpected preview: %q", preview)
 	}
 }
+
+func TestPrepareRecallHitsCapsAndPrivacyGate(t *testing.T) {
+	t.Parallel()
+
+	hits := make([]memory.MemoryHit, 0, 12)
+	for i := 0; i < 12; i++ {
+		hits = append(hits, memory.MemoryHit{Provider: "p", ID: string(rune('a' + i)), Text: "secret text", Score: 0.9, Relevance: 0.8})
+	}
+
+	previewOff := false
+	recorder := NewRecorder(config.TelemetryConfig{CaptureQueryPreview: &previewOff}, "config.yaml")
+	event := Event{}
+	recorder.PrepareRecallHits(&event, hits)
+	if len(event.RecallHits) != maxRecallHitDetails {
+		t.Fatalf("recall hits = %d, want capped %d", len(event.RecallHits), maxRecallHitDetails)
+	}
+	if event.RecallHits[0].TextPreview != "" {
+		t.Fatalf("text preview leaked with capture disabled: %q", event.RecallHits[0].TextPreview)
+	}
+	if event.RecallHits[0].Score != 0.9 || event.RecallHits[0].Relevance != 0.8 || event.RecallHits[0].Provider != "p" {
+		t.Fatalf("non-text hit fields = %#v", event.RecallHits[0])
+	}
+
+	previewOn := true
+	recorder = NewRecorder(config.TelemetryConfig{CaptureQueryPreview: &previewOn}, "config.yaml")
+	event = Event{}
+	recorder.PrepareRecallHits(&event, hits)
+	if event.RecallHits[0].TextPreview != "secret text" {
+		t.Fatalf("text preview = %q", event.RecallHits[0].TextPreview)
+	}
+
+	longText := strings.Repeat("x", 200)
+	event = Event{}
+	recorder.PrepareRecallHits(&event, []memory.MemoryHit{{Provider: "p", ID: "1", Text: longText}})
+	if got := len([]rune(event.RecallHits[0].TextPreview)); got != recallHitPreviewRunes {
+		t.Fatalf("preview runes = %d, want %d", got, recallHitPreviewRunes)
+	}
+
+	event = Event{}
+	recorder.PrepareRecallHits(&event, nil)
+	if event.RecallHits != nil {
+		t.Fatalf("empty hits should not set recall hits, got %#v", event.RecallHits)
+	}
+}
+
+func TestEffectiveSettingsDefaultsQueryPreviewOn(t *testing.T) {
+	t.Parallel()
+
+	if settings := EffectiveSettings(config.TelemetryConfig{}, "config.yaml"); !settings.CaptureQueryPreview {
+		t.Fatal("query preview capture should default to on")
+	}
+	off := false
+	if settings := EffectiveSettings(config.TelemetryConfig{CaptureQueryPreview: &off}, "config.yaml"); settings.CaptureQueryPreview {
+		t.Fatal("explicit false should disable query preview capture")
+	}
+}

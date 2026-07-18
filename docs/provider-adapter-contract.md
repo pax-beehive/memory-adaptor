@@ -84,6 +84,17 @@ and `eligible_count` in the existing provider-recall telemetry details. This
 makes a score-direction or threshold problem visible through existing logs and
 JSON diagnostics without adding a new public command.
 
+## Search filters versus runtime metadata
+
+`SearchQuery.Metadata` carries runtime and diagnostic context (hook session
+ids, event sources, recall phases). Providers must never translate it into
+store-native filter criteria: hook payloads change per session, so metadata
+filters silently exclude every previously written memory. Only
+`SearchQuery.Filters`, which callers set explicitly, may become provider-side
+filters. The Mem0 and Mem0 Cloud adapters follow this rule; both still send
+the configured `user_id`, `agent_id`, and `run_id` entity scope from provider
+configuration on every request.
+
 ## Mem0 search scope payload compatibility
 
 The self-hosted Mem0 adapter owns the placement of provider entity scope in

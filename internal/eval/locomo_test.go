@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pax-beehive/paxm/internal/config"
@@ -197,3 +198,33 @@ func (p *providerWithoutCleanup) Put(_ context.Context, item memory.MemoryItem) 
 	return memory.MemoryRef{Provider: p.Name(), ID: item.ID}, nil
 }
 func (p *providerWithoutCleanup) Health(context.Context) error { return nil }
+
+type zeroHitTestProvider struct{ locomoTestProvider }
+
+func (p *zeroHitTestProvider) Search(context.Context, memory.SearchQuery) ([]memory.MemoryHit, error) {
+	return nil, nil
+}
+
+func TestLoCoMoRunnerPreflightFailsWhenIngestedMarkerIsNotRecalled(t *testing.T) {
+	dataset := LoCoMoDataset{Conversations: []LoCoMoConversation{{
+		ID: "sample-1",
+		Sessions: []LoCoMoSession{{Number: 1, DateTime: "1 June 2023", Turns: []LoCoMoTurn{
+			{Speaker: "Alice", ID: "D2:1", Text: "I adopted a dog."},
+		}}},
+		Questions: []LoCoMoQuestion{{Question: "What did Alice adopt?", Evidence: []string{"D2:1"}, Category: 1}},
+	}}}
+	dir := t.TempDir()
+	cfg := config.DefaultConfig(filepath.Join(dir, "config.yaml"))
+	cfg.Providers["primary"] = config.ProviderConfig{Type: "mem0", Enabled: true, RunID: "normal"}
+	provider := &zeroHitTestProvider{}
+	runner := LoCoMoRunner{BuildProvider: func(string, config.ProviderConfig) (memory.Provider, error) { return provider, nil }}
+	_, err := runner.Run(context.Background(), dataset, LoCoMoRunOptions{
+		Config: cfg, Provider: "primary", RunID: "preflight-test", ManifestDir: dir, Limit: 5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "eval preflight") {
+		t.Fatalf("expected preflight failure, got %v", err)
+	}
+	if len(provider.items) != 1 {
+		t.Fatalf("preflight failed before ingest wrote items: %#v", provider.items)
+	}
+}

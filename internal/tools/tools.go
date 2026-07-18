@@ -15,6 +15,9 @@ type RecallInput struct {
 	Profile string            `json:"profile,omitempty"`
 	Limit   int               `json:"limit,omitempty"`
 	Meta    map[string]string `json:"meta,omitempty"`
+	// Filters is the only field providers translate into store-native search
+	// filters. Meta stays runtime/diagnostic context and never filters.
+	Filters map[string]string `json:"filters,omitempty"`
 }
 type RecallResult struct {
 	Query           string                  `json:"query"`
@@ -55,10 +58,23 @@ type Agent interface {
 type Engine struct {
 	cfg    config.Config
 	router *memory.Router
+	clock  memory.Clock
 }
 
 func New(cfg config.Config, router *memory.Router) *Engine {
-	return &Engine{cfg: config.Normalize(cfg), router: router}
+	return NewWithClock(cfg, router, nil)
+}
+
+// NewWithClock is New with an injectable clock for deterministic timestamps.
+func NewWithClock(cfg config.Config, router *memory.Router, clock memory.Clock) *Engine {
+	return &Engine{cfg: config.Normalize(cfg), router: router, clock: clock}
+}
+
+func (s *Engine) nowUTC() time.Time {
+	if s.clock != nil {
+		return s.clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (s *Engine) Recall(ctx context.Context, input RecallInput) (RecallResult, error) {
@@ -70,7 +86,7 @@ func (s *Engine) Recall(ctx context.Context, input RecallInput) (RecallResult, e
 	if err != nil {
 		return RecallResult{}, err
 	}
-	value, err := s.router.SearchWithPolicy(ctx, memory.SearchQuery{Text: query, Metadata: memory.WithoutProvenanceMetadata(input.Meta)}, policy)
+	value, err := s.router.SearchWithPolicy(ctx, memory.SearchQuery{Text: query, Metadata: memory.WithoutProvenanceMetadata(input.Meta), Filters: input.Filters}, policy)
 	result := RecallResult{Query: query, Hits: value.Hits, ProviderErrors: value.ProviderErrors, ProviderRecalls: value.ProviderRecalls}
 	if errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		result.TimedOut = true
@@ -78,7 +94,7 @@ func (s *Engine) Recall(ctx context.Context, input RecallInput) (RecallResult, e
 	return result, err
 }
 func (s *Engine) Remember(ctx context.Context, input RememberInput) (RememberResult, error) {
-	item, profile, ok := itemFromInput(input)
+	item, profile, ok := s.itemFromInput(input)
 	if !ok {
 		return RememberResult{}, errors.New("ingest text is required")
 	}
@@ -102,7 +118,7 @@ func (s *Engine) RememberBatchToProvider(ctx context.Context, provider string, i
 func (s *Engine) rememberBatch(ctx context.Context, provider string, input RememberBatchInput) (RememberResult, error) {
 	grouped := map[string][]memory.MemoryItem{}
 	for _, inputItem := range input.Items {
-		item, profile, ok := itemFromInput(inputItem)
+		item, profile, ok := s.itemFromInput(inputItem)
 		if ok {
 			item = memory.ApplyProvenance(item, s.provenance(profile, inputItem.AgentName))
 			grouped[profile] = append(grouped[profile], item)
@@ -178,7 +194,7 @@ func (s *Engine) PreservesTurnBoundaries(provider string) bool {
 }
 func (s *Engine) PutPolicy(profile string) (memory.PutPolicy, error) { return s.putPolicy(profile) }
 
-func itemFromInput(input RememberInput) (memory.MemoryItem, string, bool) {
+func (s *Engine) itemFromInput(input RememberInput) (memory.MemoryItem, string, bool) {
 	text := strings.TrimSpace(input.Text)
 	if text == "" {
 		return memory.MemoryItem{}, "", false
@@ -189,7 +205,7 @@ func itemFromInput(input RememberInput) (memory.MemoryItem, string, bool) {
 	}
 	created := input.CreatedAt
 	if created.IsZero() {
-		created = time.Now().UTC()
+		created = s.nowUTC()
 	} else {
 		created = created.UTC()
 	}

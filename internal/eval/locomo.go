@@ -173,10 +173,14 @@ func (r LoCoMoRunner) runConversation(ctx context.Context, conversation LoCoMoCo
 		case <-timer.C:
 		}
 	}
+	if err := preflightRecallMarker(ctx, provider, conversation); err != nil {
+		_ = scope.SetStatus(EvalStatusFailed, err)
+		return nil, err
+	}
 	for _, question := range conversation.Questions {
 		hits, searchErr := provider.Search(ctx, memory.SearchQuery{
 			Text: question.Question, Limit: opts.Limit,
-			Metadata: map[string]string{"locomo_conversation_id": conversation.ID},
+			Filters: map[string]string{"locomo_conversation_id": conversation.ID},
 		})
 		questionResult := scoreLoCoMoQuestion(conversation.ID, question, hits, opts.Limit)
 		if searchErr != nil {
@@ -189,6 +193,32 @@ func (r LoCoMoRunner) runConversation(ctx context.Context, conversation LoCoMoCo
 		return results, err
 	}
 	return results, nil
+}
+
+// preflightRecallMarker fails the run when an ingested marker cannot be
+// recalled through the same search path as the questions, catching silent
+// zero-candidate failures (such as filter misconfiguration) instead of
+// reporting them as zero recall-at-k.
+func preflightRecallMarker(ctx context.Context, provider memory.Provider, conversation LoCoMoConversation) error {
+	items := loCoMoMemoryItems(conversation)
+	if len(items) == 0 {
+		return nil
+	}
+	marker := []rune(items[0].Text)
+	if len(marker) > 160 {
+		marker = marker[:160]
+	}
+	hits, err := provider.Search(ctx, memory.SearchQuery{
+		Text: string(marker), Limit: 10,
+		Filters: map[string]string{"locomo_conversation_id": conversation.ID},
+	})
+	if err != nil {
+		return fmt.Errorf("eval preflight marker recall: %w", err)
+	}
+	if len(hits) == 0 {
+		return fmt.Errorf("eval preflight: ingested %d items but marker recall returned 0 hits for conversation %s", len(items), conversation.ID)
+	}
+	return nil
 }
 
 func validateEvalCleanupCapability(scope *ProviderScope, provider memory.Provider) error {

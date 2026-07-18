@@ -191,7 +191,8 @@ func TestSearchMapsMem0Results(t *testing.T) {
 	hits, err := provider.Search(context.Background(), memory.SearchQuery{
 		Text:     "paxm config",
 		Limit:    200,
-		Metadata: map[string]string{"project": "paxm", "user_id": "ignored"},
+		Metadata: map[string]string{"session_id": "new-session", "source": "opencode", "paxm_recall_phase": "initial"},
+		Filters:  map[string]string{"project": "paxm", "user_id": "ignored"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +202,11 @@ func TestSearchMapsMem0Results(t *testing.T) {
 	}
 	if captured.Filters["user_id"] != "user-1" || captured.Filters["project"] != "paxm" {
 		t.Fatalf("unexpected filters: %#v", captured.Filters)
+	}
+	for _, leaked := range []string{"session_id", "source", "paxm_recall_phase"} {
+		if _, ok := captured.Filters[leaked]; ok {
+			t.Fatalf("runtime metadata %q leaked into mem0 filters: %#v", leaked, captured.Filters)
+		}
 	}
 	if len(hits) != 1 {
 		t.Fatalf("expected one hit, got %#v", hits)
@@ -333,7 +339,9 @@ func TestSearchScopePayloadCompatibilityTable(t *testing.T) {
 			}
 			for range tt.searches {
 				_, err = provider.Search(context.Background(), memory.SearchQuery{
-					Text: "scope", Limit: 3, Tiers: []memory.MemoryTier{memory.TierLTM}, Metadata: map[string]string{"workspace": "/tmp/team-memory"},
+					Text: "scope", Limit: 3, Tiers: []memory.MemoryTier{memory.TierLTM},
+					Metadata: map[string]string{"session_id": "hook-session", "source": "opencode"},
+					Filters:  map[string]string{"workspace": "/tmp/team-memory"},
 				})
 				if err != nil {
 					break
@@ -360,6 +368,11 @@ func assertSearchScopePayload(t *testing.T, request searchRequest, want config.M
 	t.Helper()
 	if request.Filters["workspace"] != "/tmp/team-memory" || request.Filters["paxm_tier"] != "ltm" {
 		t.Fatalf("search metadata filters were lost: %#v", request)
+	}
+	for _, leaked := range []string{"session_id", "source"} {
+		if _, ok := request.Filters[leaked]; ok {
+			t.Fatalf("runtime metadata %q leaked into mem0 filters: %#v", leaked, request)
+		}
 	}
 	if want == config.Mem0SearchScopePayloadFilters {
 		if request.UserID != "" || request.AgentID != "" || request.RunID != "" {

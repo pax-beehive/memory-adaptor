@@ -67,6 +67,12 @@ func (r Registry) BuildProvider(name string, cfg config.ProviderConfig) (memory.
 }
 
 func (r Registry) BuildRouter(cfg config.Config) (*memory.Router, error) {
+	return r.BuildRouterWithClock(cfg, nil)
+}
+
+// BuildRouterWithClock is BuildRouter with an injectable clock for the
+// router's ranking and expiry decisions.
+func (r Registry) BuildRouterWithClock(cfg config.Config, clock memory.Clock) (*memory.Router, error) {
 	var names []string
 	for name := range cfg.Providers {
 		names = append(names, name)
@@ -91,7 +97,7 @@ func (r Registry) BuildRouter(cfg config.Config) (*memory.Router, error) {
 			Weight:   1,
 		})
 	}
-	return memory.NewRouter(bindings)
+	return memory.NewRouter(bindings, memory.WithClock(clock))
 }
 
 func providerRequiredByAnyProfile(cfg config.Config, providerName string) bool {

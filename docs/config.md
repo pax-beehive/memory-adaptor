@@ -355,7 +355,7 @@ telemetry:
   max_event_file_bytes: 1048576
   max_event_files: 3
   retention_days: 30
-  capture_query_preview: false
+  capture_query_preview: true
   query_preview_chars: 80
 ```
 
@@ -909,6 +909,7 @@ paxm history --days 7          # aggregate metrics
 paxm logs --tail 100           # recent raw events across rotated files
 paxm logs --tail 0 --follow    # new events only, following rotation
 paxm logs --tail 100 --json    # raw JSONL output
+paxm dashboard                 # localhost web view: metrics, logs, sessions, recalls
 ```
 
 `paxm logs --follow` stops on Ctrl-C. Raw logs remain a local CLI surface and
@@ -916,7 +917,13 @@ are not exposed by `paxm mcp serve`.
 
 Privacy:
 
-- Query text is not stored by default. Telemetry stores query length and a
-  SHA-256 hash prefix for correlation.
-- Set `capture_query_preview: true` only if local debugging needs a short query
-  preview. The preview is capped by `query_preview_chars`.
+- Query text previews are stored by default (`capture_query_preview: true`),
+  capped by `query_preview_chars`, alongside the query length and SHA-256 hash
+  prefix. The same switch also controls recalled-memory text previews (capped
+  at 160 characters) on recall events, which `paxm dashboard` uses for manual
+  recall-quality inspection. Set it to `false` to store only lengths, hashes,
+  counts, and scores.
+- All telemetry stays local and is bounded by `max_event_file_bytes` and
+  `max_event_files`.
+- `paxm dashboard` serves these events on a loopback-only web view; keep its
+  listen address on 127.0.0.1.

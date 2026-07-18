@@ -197,3 +197,49 @@ func TestRememberBatchToProviderKeepsWriteProfileTimeout(t *testing.T) {
 		t.Fatalf("RememberBatchToProvider() returned after %s", elapsed)
 	}
 }
+
+func TestRememberUsesInjectedClockForDefaultCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	provider := &providerStub{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := time.Date(2038, 3, 1, 12, 0, 0, 0, time.UTC)
+	engine := NewWithClock(config.DefaultConfig("config.yaml"), router, func() time.Time { return fixed })
+	if _, err := engine.Remember(context.Background(), RememberInput{Text: "timestamped"}); err != nil {
+		t.Fatal(err)
+	}
+	if !provider.item.CreatedAt.Equal(fixed) {
+		t.Fatalf("created_at = %v, want injected clock %v", provider.item.CreatedAt, fixed)
+	}
+}
+
+func TestRecallPassesExplicitFiltersButNotRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &providerStub{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(config.DefaultConfig("config.yaml"), router)
+	_, err = engine.Recall(context.Background(), RecallInput{
+		Query:   "deploy",
+		Meta:    map[string]string{"session_id": "s-1", "source": "opencode"},
+		Filters: map[string]string{"workspace": "/repo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.query.Filters["workspace"] != "/repo" {
+		t.Fatalf("explicit filters not forwarded: %#v", provider.query.Filters)
+	}
+	if _, ok := provider.query.Filters["session_id"]; ok {
+		t.Fatalf("runtime metadata leaked into filters: %#v", provider.query.Filters)
+	}
+	if provider.query.Metadata["session_id"] != "s-1" {
+		t.Fatalf("runtime metadata missing from diagnostic metadata: %#v", provider.query.Metadata)
+	}
+}

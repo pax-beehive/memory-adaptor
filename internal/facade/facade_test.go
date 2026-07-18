@@ -16,13 +16,14 @@ import (
 )
 
 type captureProvider struct {
-	query string
-	limit int
-	meta  map[string]string
-	tiers []memory.MemoryTier
-	hits  []memory.MemoryHit
-	items []memory.MemoryItem
-	delay time.Duration
+	query   string
+	limit   int
+	meta    map[string]string
+	filters map[string]string
+	tiers   []memory.MemoryTier
+	hits    []memory.MemoryHit
+	items   []memory.MemoryItem
+	delay   time.Duration
 }
 
 func (p *captureProvider) Name() string {
@@ -36,6 +37,7 @@ func (p *captureProvider) Search(_ context.Context, query memory.SearchQuery) ([
 	p.query = query.Text
 	p.limit = query.Limit
 	p.meta = query.Metadata
+	p.filters = query.Filters
 	p.tiers = append([]memory.MemoryTier(nil), query.Tiers...)
 	if p.hits != nil {
 		return p.hits, nil
@@ -1364,4 +1366,121 @@ func hitIDs(hits []memory.MemoryHit) []string {
 		values = append(values, hit.ID)
 	}
 	return values
+}
+
+func TestHookWriteItemUsesInjectedClock(t *testing.T) {
+	t.Parallel()
+
+	provider := &captureProvider{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := time.Date(2038, 3, 1, 12, 0, 0, 0, time.UTC)
+	service := NewWithClock(config.Config{
+		Version: 1,
+		WriteProfiles: map[string]config.WriteProfileConfig{
+			"default": {
+				Providers:    []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				ExpiresAfter: "24h",
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"codex": {
+				Enabled: true,
+				Hooks: map[string]config.AgentHookConfig{
+					"user_input": {
+						Write: config.HookWriteConfig{Enabled: true, Profile: "default"},
+					},
+				},
+			},
+		},
+	}, router, func() time.Time { return fixed })
+
+	item, ok, err := service.HookWriteItem(HookEvent{Target: "codex", Event: "user_input", Prompt: "remember this"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected hook write item")
+	}
+	if !item.CreatedAt.Equal(fixed) {
+		t.Fatalf("created_at = %v, want injected clock %v", item.CreatedAt, fixed)
+	}
+	wantExpiry := fixed.Add(24 * time.Hour)
+	if item.ExpiresAt == nil || !item.ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("expires_at = %v, want %v", item.ExpiresAt, wantExpiry)
+	}
+}
+
+func TestRunHookRecallDoesNotTurnRuntimeMetadataIntoFilters(t *testing.T) {
+	t.Parallel()
+
+	hits := []memory.MemoryHit{
+		{ID: "m1", Text: "deploy via github actions", Relevance: 0.9},
+		{ID: "m2", Text: "never deploy from a laptop", Relevance: 0.8},
+	}
+	provider := &captureProvider{hits: hits}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Read: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(config.Config{
+		Version: 1,
+		RecallProfiles: map[string]config.RecallProfileConfig{
+			"default": {
+				Providers:  []config.ProviderRouteConfig{{Name: "capture", Required: true, Weight: 1}},
+				MaxResults: 5,
+			},
+		},
+		Agents: map[string]config.AgentConfig{
+			"opencode": {
+				Enabled: true,
+				Hooks: map[string]config.AgentHookConfig{
+					"user_input": {
+						Recall: config.HookRecallConfig{Enabled: true, Profile: "default", MaxResults: 5},
+					},
+				},
+			},
+		},
+	}, router)
+
+	active, err := service.Recall(context.Background(), RecallInput{Query: "deploy", Profile: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active.Hits) != 2 {
+		t.Fatalf("active recall hits = %d, want 2", len(active.Hits))
+	}
+	if len(provider.filters) != 0 {
+		t.Fatalf("active recall passed filters: %#v", provider.filters)
+	}
+
+	hook, err := service.RunHook(context.Background(), HookEvent{
+		Target: "opencode", Event: "user_input", Query: "deploy",
+		Metadata: map[string]string{
+			"session_id": "hook-session", "source": "opencode", "paxm_recall_phase": "initial",
+			"cwd": "/repo", "model": "gpt-x",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hook.Recall == nil || len(hook.Recall.Hits) != 2 {
+		t.Fatalf("hook recall hits = %#v, want 2", hook.Recall)
+	}
+	for _, leaked := range []string{"session_id", "source", "paxm_recall_phase", "cwd", "model"} {
+		if _, ok := provider.filters[leaked]; ok {
+			t.Fatalf("runtime metadata %q became a provider filter: %#v", leaked, provider.filters)
+		}
+	}
+	if provider.meta["session_id"] != "hook-session" || provider.meta["paxm_recall_phase"] != "initial" {
+		t.Fatalf("runtime metadata should still reach the provider as diagnostic metadata: %#v", provider.meta)
+	}
+
+	activeCandidates := active.ProviderRecalls[0].CandidateCount
+	hookCandidates := hook.Recall.ProviderRecalls[0].CandidateCount
+	if hookCandidates == 0 || hookCandidates != activeCandidates {
+		t.Fatalf("candidate mismatch: active=%d hook=%d", activeCandidates, hookCandidates)
+	}
 }

@@ -11,15 +11,16 @@ import (
 )
 
 type RecallTelemetryInput struct {
-	Kind      string
-	Source    string
-	Target    string
-	HookEvent string
-	Profile   string
-	Result    facade.RecallResult
-	Skipped   bool
-	Duration  time.Duration
-	Err       error
+	Kind       string
+	Source     string
+	Target     string
+	HookEvent  string
+	Profile    string
+	SessionKey string
+	Result     facade.RecallResult
+	Skipped    bool
+	Duration   time.Duration
+	Err        error
 }
 
 type RememberTelemetryInput struct {
@@ -51,6 +52,7 @@ func RecallTelemetryEvent(cfg config.Config, input RecallTelemetryInput) telemet
 		ProviderErrorDetails:  telemetry.ProviderErrors(input.Result.ProviderErrors),
 		ProviderRecallDetails: input.Result.ProviderRecalls,
 		RecallTimedOut:        input.Result.TimedOut,
+		SessionKey:            input.SessionKey,
 		Error:                 TelemetryError(input.Err),
 	}
 }

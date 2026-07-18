@@ -931,14 +931,91 @@ func TestRouterValidationHealthAndErrorTables(t *testing.T) {
 		if got := normalizedRelevance(MemoryHit{Score: 0.4}); got != 0.4 {
 			t.Fatalf("score fallback relevance = %v", got)
 		}
-		if got := recencyScore(time.Now().Add(time.Hour), 0.5); got != 0.5 {
+		now := time.Now()
+		if got := recencyScore(now.Add(time.Hour), 0.5, now); got != 0.5 {
 			t.Fatalf("future recency score = %v", got)
 		}
-		if got := recencyScore(time.Time{}, 0.5); got != 0 {
+		if got := recencyScore(time.Time{}, 0.5, now); got != 0 {
 			t.Fatalf("zero recency score = %v", got)
+		}
+		if got := recencyScore(now.Add(-24*time.Hour), 0.5, now); got != 0.25 {
+			t.Fatalf("one day old recency score = %v, want 0.25", got)
 		}
 		if got := dedupeKey(MemoryHit{Provider: "p", ID: "id"}); got != "id:p:id" {
 			t.Fatalf("dedupeKey(id) = %q", got)
+		}
+	})
+}
+
+func TestRouterUsesInjectedClock(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2038, 3, 1, 12, 0, 0, 0, time.UTC)
+	clock := Clock(func() time.Time { return fixed })
+
+	t.Run("search expiry and recency use injected clock", func(t *testing.T) {
+		t.Parallel()
+		expiredAt := fixed.Add(-time.Hour)
+		hits := []MemoryHit{
+			{ID: "expired", Text: "expired memory", Relevance: 1, ExpiresAt: &expiredAt},
+			{ID: "fresh", Text: "fresh memory", Relevance: 0.8, CreatedAt: fixed.Add(-24 * time.Hour)},
+		}
+		router, err := NewRouter([]ProviderBinding{{Provider: fakeProvider{name: "p", hits: hits}, Read: true}}, WithClock(clock))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := router.SearchWithPolicy(context.Background(), SearchQuery{Text: "memory"}, SearchPolicy{RecencyBoost: 0.5})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Hits) != 1 || result.Hits[0].ID != "fresh" {
+			t.Fatalf("hits = %#v, want only the fresh hit", result.Hits)
+		}
+		// relevance 0.8 * weight 1 + recency 0.5/(1+1d) = 1.05
+		if got := result.Hits[0].Score; got < 1.049 || got > 1.051 {
+			t.Fatalf("score = %v, want ~1.05 (relevance 0.8 + recency 0.25)", got)
+		}
+	})
+
+	t.Run("put expiry base uses injected clock", func(t *testing.T) {
+		t.Parallel()
+		provider := &captureBatchProvider{fakeProvider: fakeProvider{name: "p"}}
+		router, err := NewRouter([]ProviderBinding{{Provider: provider, Write: true}}, WithClock(clock))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := router.PutBatchWithPolicy(context.Background(), []MemoryItem{{Text: "memory"}}, PutPolicy{ExpiresAfter: 24 * time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+		if len(provider.items) != 1 {
+			t.Fatalf("captured items = %d, want 1", len(provider.items))
+		}
+		expiresAt := provider.items[0].ExpiresAt
+		if expiresAt == nil || !expiresAt.Equal(fixed.Add(24*time.Hour)) {
+			t.Fatalf("expires_at = %v, want %v", expiresAt, fixed.Add(24*time.Hour))
+		}
+	})
+
+	t.Run("ltm admission timestamps use injected clock", func(t *testing.T) {
+		t.Parallel()
+		provider := &captureBatchProvider{fakeProvider: fakeProvider{name: "p"}}
+		router, err := NewRouter([]ProviderBinding{{Provider: provider, Write: true}}, WithClock(clock))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := router.PutWithPolicy(context.Background(), MemoryItem{Text: "long term", Tier: TierLTM}, PutPolicy{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(provider.items) != 1 {
+			t.Fatalf("captured items = %d, want 1", len(provider.items))
+		}
+		item := provider.items[0]
+		if !item.CreatedAt.Equal(fixed) {
+			t.Fatalf("created_at = %v, want injected clock %v", item.CreatedAt, fixed)
+		}
+		stamp := fixed.Format(time.RFC3339Nano)
+		if item.Metadata[MetadataFirstSeenAt] != stamp || item.Metadata[MetadataLastSeenAt] != stamp {
+			t.Fatalf("seen timestamps = %q/%q, want %q", item.Metadata[MetadataFirstSeenAt], item.Metadata[MetadataLastSeenAt], stamp)
 		}
 	})
 }

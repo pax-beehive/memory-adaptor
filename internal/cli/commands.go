@@ -11,7 +11,7 @@ const (
 )
 
 var commandClasses = map[string]commandClass{
-	"setup": operatorCommand, "uninstall": operatorCommand, "history": operatorCommand, "logs": operatorCommand, "backfill": operatorCommand, "eval": operatorCommand, "update": operatorCommand, "version": operatorCommand, "config": operatorCommand,
+	"setup": operatorCommand, "uninstall": operatorCommand, "history": operatorCommand, "logs": operatorCommand, "dashboard": operatorCommand, "backfill": operatorCommand, "eval": operatorCommand, "update": operatorCommand, "version": operatorCommand, "config": operatorCommand,
 	"recall": toolCommand, "remember": toolCommand, "mcp": toolCommand,
 	"__hook": internalCommand, "__hook-daemon": internalCommand, "__hook-control": internalCommand,
 }

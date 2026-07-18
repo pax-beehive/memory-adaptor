@@ -31,6 +31,12 @@ func ConfigFile(configPath string) string {
 }
 
 func Load(configPath string) (*Runtime, error) {
+	return LoadWithClock(configPath, nil)
+}
+
+// LoadWithClock is Load with an injectable clock threaded through the router,
+// facade, and tools engine.
+func LoadWithClock(configPath string, clock memory.Clock) (*Runtime, error) {
 	path := ConfigFile(configPath)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -39,11 +45,11 @@ func Load(configPath string) (*Runtime, error) {
 		}
 		return nil, err
 	}
-	router, err := adapters.DefaultRegistry().BuildRouter(cfg)
+	router, err := adapters.DefaultRegistry().BuildRouterWithClock(cfg, clock)
 	if err != nil {
 		return nil, err
 	}
-	core := facade.New(cfg, router)
+	core := facade.NewWithClock(cfg, router, clock)
 	engine := core.Tools()
 	return &Runtime{
 		ConfigPath: path,

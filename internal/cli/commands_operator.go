@@ -12,6 +12,8 @@ func (r runner) runOperatorCommand(command string, args []string) error {
 		return r.runHistory(args)
 	case "logs":
 		return r.runLogs(args)
+	case "dashboard":
+		return r.runDashboard(args)
 	case "backfill":
 		return r.runBackfill(args)
 	case "eval":
