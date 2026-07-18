@@ -134,7 +134,7 @@ func (p *Provider) Search(ctx context.Context, query memory.SearchQuery) ([]memo
 	if text == "" {
 		return nil, errors.New("mem0 cloud search query is required")
 	}
-	metadata := copyStrings(query.Metadata)
+	metadata := copyStrings(query.Filters)
 	if tiers := memory.NormalizeTiers(query.Tiers); len(tiers) == 1 {
 		metadata["paxm_tier"] = string(tiers[0])
 	}

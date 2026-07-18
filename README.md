@@ -144,6 +144,7 @@ Write and recall a memory:
 paxm remember --profile ltm --text "We chose SQLite for the local memory layer"
 paxm recall --query "local memory layer"
 paxm history --days 7
+paxm dashboard   # localhost metrics, logs, sessions, and recall inspection
 ```
 
 Select OpenCode during setup to install a global local plugin under

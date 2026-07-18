@@ -527,6 +527,7 @@ func (s *Server) recordRecall(rt *paxruntime.Runtime, profile, query string, res
 	})
 	recorder := telemetry.NewRecorder(rt.Config.Telemetry, rt.ConfigPath)
 	recorder.PrepareQueryEvent(&event, query)
+	recorder.PrepareRecallHits(&event, result.Hits)
 	return recorder.Record(event)
 }
 

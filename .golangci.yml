@@ -44,7 +44,7 @@ linters:
         linters:
           - gocognit
           - gocyclo
-      - path: (^|/)internal/cli/commands_operator_impl\.go$
+      - path: (^|/)internal/cli/eval\.go$
         text: func.*(Eval|LoCoMo|Conformance)
         linters:
           - gocognit

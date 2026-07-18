@@ -27,7 +27,7 @@ func (r runner) executeHook(event capture.Event, jsonOut, codexNative bool) erro
 	if result.Recall != nil {
 		query, recall = result.Recall.Query, *result.Recall
 	}
-	r.recordRecallTelemetry(cfg, "hook_recall", "hook", result.Target, result.Event, hookRecallProfile(cfg, event), query, recall, result.Skipped, time.Since(started), err)
+	r.recordRecallTelemetryWithSession(cfg, "hook_recall", "hook", result.Target, result.Event, hookRecallProfile(cfg, event), query, recall, result.Skipped, capture.SessionKey(event), time.Since(started), err)
 	if err != nil {
 		return err
 	}

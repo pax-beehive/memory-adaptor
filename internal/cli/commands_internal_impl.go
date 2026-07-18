@@ -1064,19 +1064,25 @@ func hookSocketPath(configPath string) string {
 }
 
 func (r runner) recordRecallTelemetry(cfg config.Config, kind, source, target, hookEvent, profile, query string, result tools.RecallResult, skipped bool, duration time.Duration, opErr error) {
+	r.recordRecallTelemetryWithSession(cfg, kind, source, target, hookEvent, profile, query, result, skipped, "", duration, opErr)
+}
+
+func (r runner) recordRecallTelemetryWithSession(cfg config.Config, kind, source, target, hookEvent, profile, query string, result tools.RecallResult, skipped bool, sessionKey string, duration time.Duration, opErr error) {
 	event := paxruntime.RecallTelemetryEvent(cfg, paxruntime.RecallTelemetryInput{
-		Kind:      kind,
-		Source:    source,
-		Target:    target,
-		HookEvent: hookEvent,
-		Profile:   profile,
-		Result:    result,
-		Skipped:   skipped,
-		Duration:  duration,
-		Err:       opErr,
+		Kind:       kind,
+		Source:     source,
+		Target:     target,
+		HookEvent:  hookEvent,
+		Profile:    profile,
+		SessionKey: sessionKey,
+		Result:     result,
+		Skipped:    skipped,
+		Duration:   duration,
+		Err:        opErr,
 	})
 	recorder := telemetry.NewRecorder(cfg.Telemetry, r.configFile())
 	recorder.PrepareQueryEvent(&event, query)
+	recorder.PrepareRecallHits(&event, result.Hits)
 	r.recordTelemetry(cfg, event)
 }
 

@@ -187,9 +187,8 @@ func setMetadata(metadata map[string]string, key, value string) {
 	}
 }
 
-func admitLongTermMemories(items []MemoryItem) []MemoryItem {
+func admitLongTermMemories(items []MemoryItem, now time.Time) []MemoryItem {
 	admitted := append([]MemoryItem(nil), items...)
-	now := time.Now().UTC()
 	for i := range admitted {
 		item := admitted[i]
 		if item.ID != "" || NormalizeTier(item.Tier) != TierLTM {

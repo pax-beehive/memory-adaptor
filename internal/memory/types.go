@@ -136,7 +136,11 @@ type SearchQuery struct {
 	Text     string            `json:"text"`
 	Limit    int               `json:"limit,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
-	Tiers    []MemoryTier      `json:"tiers,omitempty"`
+	// Filters carries caller-explicit provider-side filter criteria. Unlike
+	// Metadata (runtime/diagnostic context), Filters is opt-in: providers must
+	// only translate Filters into store-native filter syntax.
+	Filters map[string]string `json:"filters,omitempty"`
+	Tiers   []MemoryTier      `json:"tiers,omitempty"`
 }
 
 type MemoryHit struct {

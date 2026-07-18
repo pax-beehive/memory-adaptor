@@ -18,6 +18,7 @@ cmd/paxm
   internal/adapters     provider registry
   internal/config       YAML config model and compatibility loading
   internal/telemetry    bounded local logs, metrics, and history summaries
+  internal/dashboard    localhost read-only telemetry web view
 ```
 
 The CLI no longer imports the facade. Active CLI commands and MCP are adapters
@@ -28,7 +29,8 @@ directly because their purpose is to test below the application interfaces.
 
 Top-level commands have an explicit audience:
 
-- operator: setup, uninstall, config, history, logs, backfill, eval, update;
+- operator: setup, uninstall, config, history, logs, dashboard, backfill, eval,
+  update;
 - agent tools: recall, remember, MCP;
 - internal transport: hook, hook daemon, and hook control commands.
 
@@ -48,6 +50,11 @@ A memory provider is responsible for:
 - storing memory items;
 - searching memory items;
 - returning provider-local results with normalized relevance.
+
+Provider-side search filters come only from `SearchQuery.Filters`, which
+callers set explicitly. `SearchQuery.Metadata` is runtime and diagnostic
+context (hook session ids, event sources, recall phases) and must never become
+store-native filter criteria — see `docs/provider-adapter-contract.md`.
 
 Provider relevance should be normalized to `[0, 1]` by the adapter. The router
 can then compare hits from different providers without knowing provider-specific
@@ -514,10 +521,18 @@ holding the telemetry lock, then follows appends and reopens the active path whe
 rotation changes its file identity. It supports compact human output and JSONL.
 The MCP interface keeps only aggregate `paxm_history`; raw logs remain local.
 
-Default events avoid storing raw query or memory text. They include query length,
-a query hash prefix, profile, hook event, agent target, hit/insert/write counts,
-provider recall/write counts, provider hit/ref counts, provider error counts,
-and duration. Successful passive deliveries separately record provider call
+`paxm dashboard` serves a read-only localhost web view over the same telemetry:
+aggregate metrics, raw events, sessions grouped by capture session key, and
+per-recall hit details for manual recall-quality inspection. It binds to
+loopback by default and should not be exposed beyond it.
+
+Default events store bounded text previews: the query preview (capped by
+`query_preview_chars`) and, on recall events, a bounded snapshot of the
+returned hits (provider, id, score, relevance, tier, and a 160-character text
+preview). Setting `capture_query_preview: false` restricts events to query
+length, a query hash prefix, profile, hook event, agent target,
+hit/insert/write counts, provider recall/write counts, provider hit/ref
+counts, provider error counts, and duration. Successful passive deliveries separately record provider call
 duration and average per-message latency from durable capture to provider ACK.
 `paxm history` aggregates both values by provider without including failed
 attempts in the averages.

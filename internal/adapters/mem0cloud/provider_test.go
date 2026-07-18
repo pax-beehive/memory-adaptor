@@ -236,3 +236,50 @@ func TestCloudPutRetriesWriteLookupAfterEventSuccess(t *testing.T) {
 		t.Fatalf("ref = %#v, lookups = %d, err = %v", ref, lookups, err)
 	}
 }
+
+func TestCloudSearchFiltersIgnoreRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+
+	var captured map[string]any
+	client := cloudHTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode search request: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"results":[]}`)),
+			Request:    request,
+		}, nil
+	})
+	provider, err := newWithClient("cloud", config.ProviderConfig{BaseURL: "https://mem0.test", APIKey: "key", UserID: "user", AgentID: "agent", RunID: "run"}, client, func() string { return "id" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Search(context.Background(), memory.SearchQuery{
+		Text:     "scope",
+		Metadata: map[string]string{"session_id": "hook-session", "source": "opencode"},
+		Filters:  map[string]string{"workspace": "/tmp/team-memory"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filters, ok := captured["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("search request missing filters: %#v", captured)
+	}
+	if filters["user_id"] != "user" || filters["agent_id"] != "agent" || filters["run_id"] != "run" {
+		t.Fatalf("scope identity missing from filters: %#v", filters)
+	}
+	metadata, _ := filters["metadata"].(map[string]any)
+	if metadata["workspace"] != "/tmp/team-memory" {
+		t.Fatalf("explicit filters were lost: %#v", metadata)
+	}
+	for _, leaked := range []string{"session_id", "source"} {
+		if _, ok := metadata[leaked]; ok {
+			t.Fatalf("runtime metadata %q leaked into cloud metadata filters: %#v", leaked, metadata)
+		}
+		if _, ok := filters[leaked]; ok {
+			t.Fatalf("runtime metadata %q leaked into cloud top-level filters: %#v", leaked, filters)
+		}
+	}
+}

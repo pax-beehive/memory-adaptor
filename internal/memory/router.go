@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,9 +48,33 @@ type PutResult struct {
 	ProviderErrors []ProviderError `json:"provider_errors,omitempty"`
 }
 
+// Clock supplies the current time. Nil clocks fall back to time.Now.
+type Clock func() time.Time
+
+// RouterOption customizes a Router at construction time.
+type RouterOption func(*Router)
+
+// WithClock makes the router read the current time from clock instead of
+// time.Now, which keeps ranking and expiry decisions deterministic in tests.
+func WithClock(clock Clock) RouterOption {
+	return func(r *Router) {
+		if clock != nil {
+			r.clock = clock
+		}
+	}
+}
+
 type Router struct {
 	providers []ProviderBinding
 	byName    map[string]ProviderBinding
+	clock     Clock
+}
+
+func (r *Router) nowUTC() time.Time {
+	if r.clock != nil {
+		return r.clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (r *Router) Close() error {
@@ -66,7 +91,7 @@ func (r *Router) Close() error {
 	return errors.Join(errs...)
 }
 
-func NewRouter(providers []ProviderBinding) (*Router, error) {
+func NewRouter(providers []ProviderBinding, opts ...RouterOption) (*Router, error) {
 	byName := make(map[string]ProviderBinding, len(providers))
 	normalized := make([]ProviderBinding, 0, len(providers))
 	for _, binding := range providers {
@@ -85,7 +110,11 @@ func NewRouter(providers []ProviderBinding) (*Router, error) {
 		byName[name] = binding
 		normalized = append(normalized, binding)
 	}
-	return &Router{providers: normalized, byName: byName}, nil
+	router := &Router{providers: normalized, byName: byName}
+	for _, opt := range opts {
+		opt(router)
+	}
+	return router, nil
 }
 
 func (r *Router) Search(ctx context.Context, query SearchQuery) (SearchResult, error) {
@@ -109,7 +138,7 @@ func (r *Router) SearchWithPolicy(ctx context.Context, query SearchQuery, policy
 		query.Tiers = NormalizeTiers(policy.Tiers)
 	}
 
-	result, requiredErrs := collectSearchResponses(searchProviders(ctx, query, readable), policy)
+	result, requiredErrs := collectSearchResponses(searchProviders(ctx, query, readable), policy, r.nowUTC())
 	if len(requiredErrs) > 0 {
 		return result, errors.Join(requiredErrs...)
 	}
@@ -148,51 +177,55 @@ func (r *Router) readableBindings(policy SearchPolicy) ([]ProviderBinding, error
 }
 
 func searchProviders(ctx context.Context, query SearchQuery, readable []ProviderBinding) []searchResponse {
-	responses := make(chan searchResponse, len(readable))
-	for _, binding := range readable {
-		go func(binding ProviderBinding) {
-			started := time.Now()
-			providerCtx := ctx
-			cancel := func() {}
-			if binding.Timeout > 0 {
-				providerCtx, cancel = context.WithTimeout(ctx, binding.Timeout)
-			}
-			defer cancel()
-			select {
-			case binding.searchSlot <- struct{}{}:
-			case <-providerCtx.Done():
-				responses <- searchResponse{binding: binding, err: providerCtx.Err(), duration: time.Since(started), bulkheadBusy: true}
-				return
-			}
-			providerResult := make(chan searchResponse, 1)
-			providerStarted := time.Now()
-			go func() {
-				defer func() { <-binding.searchSlot }()
-				hits, err := binding.Provider.Search(providerCtx, query)
-				providerResult <- searchResponse{binding: binding, hits: hits, err: err, duration: time.Since(providerStarted)}
-			}()
-			select {
-			case response := <-providerResult:
-				responses <- response
-			case <-providerCtx.Done():
-				responses <- searchResponse{binding: binding, err: providerCtx.Err(), duration: time.Since(providerStarted)}
-			}
-		}(binding)
+	responses := make([]searchResponse, len(readable))
+	var wg sync.WaitGroup
+	for i, binding := range readable {
+		wg.Go(func() {
+			responses[i] = runSearch(ctx, query, binding)
+		})
 	}
-
-	collected := make([]searchResponse, 0, len(readable))
-	for len(collected) < len(readable) {
-		collected = append(collected, <-responses)
-	}
-	return collected
+	wg.Wait()
+	return responses
 }
 
-func collectSearchResponses(responses []searchResponse, policy SearchPolicy) (SearchResult, []error) {
+// runSearch executes one provider search under the binding's bulkhead and
+// timeout. The bulkhead slot is held until the provider call actually returns,
+// so a stuck provider keeps occupying its slot and subsequent searches fail
+// fast instead of piling up behind it.
+func runSearch(ctx context.Context, query SearchQuery, binding ProviderBinding) searchResponse {
+	started := time.Now()
+	providerCtx := ctx
+	cancel := func() {}
+	if binding.Timeout > 0 {
+		providerCtx, cancel = context.WithTimeout(ctx, binding.Timeout)
+	}
+	defer cancel()
+	select {
+	case binding.searchSlot <- struct{}{}:
+	case <-providerCtx.Done():
+		return searchResponse{binding: binding, err: providerCtx.Err(), duration: time.Since(started), bulkheadBusy: true}
+	}
+	providerResult := make(chan searchResponse, 1)
+	providerStarted := time.Now()
+	go func() {
+		defer func() { <-binding.searchSlot }()
+		hits, err := binding.Provider.Search(providerCtx, query)
+		providerResult <- searchResponse{binding: binding, hits: hits, err: err, duration: time.Since(providerStarted)}
+	}()
+	select {
+	case response := <-providerResult:
+		return response
+	case <-providerCtx.Done():
+		return searchResponse{binding: binding, err: providerCtx.Err(), duration: time.Since(providerStarted)}
+	}
+}
+
+func collectSearchResponses(responses []searchResponse, policy SearchPolicy, now time.Time) (SearchResult, []error) {
 	var result SearchResult
 	var requiredErrs []error
 	for _, response := range responses {
 		recall := providerRecallFromResponse(response)
-		providerErr := appendSearchResponse(&result, response, policy, &recall)
+		providerErr := appendSearchResponse(&result, response, policy, &recall, now)
 		result.ProviderRecalls = append(result.ProviderRecalls, recall)
 		if providerErr != nil {
 			requiredErrs = append(requiredErrs, providerErr)
@@ -222,7 +255,7 @@ func providerRecallFromResponse(response searchResponse) ProviderRecall {
 	}
 }
 
-func appendSearchResponse(result *SearchResult, response searchResponse, policy SearchPolicy, recall *ProviderRecall) error {
+func appendSearchResponse(result *SearchResult, response searchResponse, policy SearchPolicy, recall *ProviderRecall, now time.Time) error {
 	name := response.binding.Provider.Name()
 	if response.err != nil {
 		result.ProviderErrors = append(result.ProviderErrors, ProviderError{
@@ -249,7 +282,6 @@ func appendSearchResponse(result *SearchResult, response searchResponse, policy 
 		minScore = response.binding.MinScore
 	}
 	eligible := make([]MemoryHit, 0, len(response.hits))
-	now := time.Now().UTC()
 	for _, hit := range response.hits {
 		hit.Provider = name
 		hit = ApplyHitAttribution(hit)
@@ -262,7 +294,7 @@ func appendSearchResponse(result *SearchResult, response searchResponse, policy 
 		if hit.Relevance < minRelevance {
 			continue
 		}
-		recency := recencyScore(hit.CreatedAt, policy.RecencyBoost)
+		recency := recencyScore(hit.CreatedAt, policy.RecencyBoost, now)
 		hit.Score = applyWeightAndRecency(hit.Relevance, weight, recency)
 		if hit.Score < minScore {
 			continue
@@ -273,7 +305,7 @@ func appendSearchResponse(result *SearchResult, response searchResponse, policy 
 		recall.EligibleCount = len(eligible)
 	}
 	for _, hit := range calibrateProviderHits(eligible) {
-		recency := recencyScore(hit.CreatedAt, policy.RecencyBoost)
+		recency := recencyScore(hit.CreatedAt, policy.RecencyBoost, now)
 		hit.rankingScore = applyWeightAndRecency(hit.rankingScore, weight, recency)
 		result.Hits = append(result.Hits, hit)
 	}
@@ -370,11 +402,12 @@ func (r *Router) PutBatchWithPolicy(ctx context.Context, items []MemoryItem, pol
 	if len(items) == 0 {
 		return PutResult{}, nil
 	}
-	items = applyPutPolicy(items, policy)
+	now := r.nowUTC()
+	items = applyPutPolicy(items, policy, now)
 	for i := range items {
 		items[i] = PrepareProviderItem(items[i])
 	}
-	items = admitLongTermMemories(items)
+	items = admitLongTermMemories(items, now)
 	return collectPutResponses(putProviders(ctx, writable, items))
 }
 
@@ -392,40 +425,43 @@ func (r *Router) writableBindings(policy PutPolicy) ([]ProviderBinding, error) {
 }
 
 func putProviders(ctx context.Context, writable []ProviderBinding, items []MemoryItem) []putResponse {
-	responses := make(chan putResponse, len(writable))
-	for _, binding := range writable {
-		go func(binding ProviderBinding) {
-			providerCtx := ctx
-			cancel := func() {}
-			if binding.Timeout > 0 {
-				providerCtx, cancel = context.WithTimeout(ctx, binding.Timeout)
-			}
-			defer cancel()
-			select {
-			case binding.putSlot <- struct{}{}:
-			case <-providerCtx.Done():
-				responses <- putResponse{binding: binding, err: providerCtx.Err()}
-				return
-			}
-			providerResult := make(chan putResponse, 1)
-			go func() {
-				defer func() { <-binding.putSlot }()
-				refs, err := putBatch(providerCtx, binding.Provider, items)
-				providerResult <- putResponse{binding: binding, refs: refs, err: err}
-			}()
-			select {
-			case result := <-providerResult:
-				responses <- result
-			case <-providerCtx.Done():
-				responses <- putResponse{binding: binding, err: providerCtx.Err()}
-			}
-		}(binding)
+	responses := make([]putResponse, len(writable))
+	var wg sync.WaitGroup
+	for i, binding := range writable {
+		wg.Go(func() {
+			responses[i] = runPut(ctx, binding, items)
+		})
 	}
-	collected := make([]putResponse, 0, len(writable))
-	for range writable {
-		collected = append(collected, <-responses)
+	wg.Wait()
+	return responses
+}
+
+// runPut executes one provider write under the binding's bulkhead and timeout,
+// with the same slot-holding semantics as runSearch.
+func runPut(ctx context.Context, binding ProviderBinding, items []MemoryItem) putResponse {
+	providerCtx := ctx
+	cancel := func() {}
+	if binding.Timeout > 0 {
+		providerCtx, cancel = context.WithTimeout(ctx, binding.Timeout)
 	}
-	return collected
+	defer cancel()
+	select {
+	case binding.putSlot <- struct{}{}:
+	case <-providerCtx.Done():
+		return putResponse{binding: binding, err: providerCtx.Err()}
+	}
+	providerResult := make(chan putResponse, 1)
+	go func() {
+		defer func() { <-binding.putSlot }()
+		refs, err := putBatch(providerCtx, binding.Provider, items)
+		providerResult <- putResponse{binding: binding, refs: refs, err: err}
+	}()
+	select {
+	case result := <-providerResult:
+		return result
+	case <-providerCtx.Done():
+		return putResponse{binding: binding, err: providerCtx.Err()}
+	}
 }
 
 func collectPutResponses(responses []putResponse) (PutResult, error) {
@@ -460,7 +496,7 @@ func collectPutResponses(responses []putResponse) (PutResult, error) {
 	return result, nil
 }
 
-func applyPutPolicy(items []MemoryItem, policy PutPolicy) []MemoryItem {
+func applyPutPolicy(items []MemoryItem, policy PutPolicy, now time.Time) []MemoryItem {
 	if policy.Tier == "" && policy.ExpiresAfter <= 0 {
 		return items
 	}
@@ -472,7 +508,7 @@ func applyPutPolicy(items []MemoryItem, policy PutPolicy) []MemoryItem {
 		if policy.ExpiresAfter > 0 && applied[i].ExpiresAt == nil {
 			base := applied[i].CreatedAt
 			if base.IsZero() {
-				base = time.Now().UTC()
+				base = now
 			}
 			expiresAt := base.Add(policy.ExpiresAfter).UTC()
 			applied[i].ExpiresAt = &expiresAt
@@ -557,11 +593,11 @@ func normalizedRelevance(hit MemoryHit) float64 {
 	return relevance
 }
 
-func recencyScore(createdAt time.Time, boost float64) float64 {
+func recencyScore(createdAt time.Time, boost float64, now time.Time) float64 {
 	if boost <= 0 || createdAt.IsZero() {
 		return 0
 	}
-	age := time.Since(createdAt)
+	age := now.Sub(createdAt)
 	if age < 0 {
 		return boost
 	}

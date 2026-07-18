@@ -311,11 +311,11 @@ func (p *Provider) searchFilters(query memory.SearchQuery) map[string]any {
 
 func (p *Provider) searchMetadataFilters(query memory.SearchQuery) map[string]any {
 	filters := make(map[string]any)
-	for _, key := range sortedKeys(query.Metadata) {
+	for _, key := range sortedKeys(query.Filters) {
 		if isReservedFilterKey(key) {
 			continue
 		}
-		if value := strings.TrimSpace(query.Metadata[key]); value != "" {
+		if value := strings.TrimSpace(query.Filters[key]); value != "" {
 			filters[key] = value
 		}
 	}

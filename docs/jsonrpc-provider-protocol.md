@@ -58,7 +58,8 @@ are `stm` or `ltm`.
 | | `provider` | string | optional; paxm replaces it with configured name |
 | `SearchQuery` | `text` | string | required |
 | | `limit` | positive integer | optional |
-| | `metadata` | object of string to string | optional exact-match filters |
+| | `metadata` | object of string to string | optional runtime/diagnostic context; plugins must not treat it as filter criteria |
+| | `filters` | object of string to string | optional caller-explicit exact-match filters |
 | | `tiers` | array of `stm` or `ltm` | optional filters |
 | `MemoryHit` | `id` | string | required |
 | | `text` | string | required |

@@ -51,6 +51,7 @@ type Event struct {
 	ProviderRefs               map[string]int          `json:"provider_refs,omitempty"`
 	ProviderErrorDetails       []ProviderErrorDetail   `json:"provider_errors,omitempty"`
 	ProviderRecallDetails      []memory.ProviderRecall `json:"provider_recall_details,omitempty"`
+	RecallHits                 []RecallHit             `json:"recall_hits,omitempty"`
 	RecallTimedOut             bool                    `json:"recall_timed_out,omitempty"`
 	Error                      string                  `json:"error,omitempty"`
 	EpisodeID                  string                  `json:"episode_id,omitempty"`
@@ -63,6 +64,23 @@ type ProviderErrorDetail struct {
 	Op       string `json:"op,omitempty"`
 	Required bool   `json:"required,omitempty"`
 }
+
+// RecallHit is a bounded snapshot of one recalled memory. TextPreview is only
+// populated when query preview capture is enabled; scores and identifiers are
+// always safe to record.
+type RecallHit struct {
+	Provider    string  `json:"provider,omitempty"`
+	ID          string  `json:"id,omitempty"`
+	Score       float64 `json:"score,omitempty"`
+	Relevance   float64 `json:"relevance,omitempty"`
+	Tier        string  `json:"tier,omitempty"`
+	TextPreview string  `json:"text_preview,omitempty"`
+}
+
+const (
+	maxRecallHitDetails   = 10
+	recallHitPreviewRunes = 160
+)
 
 type Metrics struct {
 	Version    int                    `json:"version"`
@@ -197,6 +215,10 @@ func EffectiveSettings(cfg config.TelemetryConfig, configPath string) Settings {
 	if queryPreviewChars <= 0 {
 		queryPreviewChars = 80
 	}
+	captureQueryPreview := true
+	if cfg.CaptureQueryPreview != nil {
+		captureQueryPreview = *cfg.CaptureQueryPreview
+	}
 	return Settings{
 		Enabled:             enabled,
 		Dir:                 dir,
@@ -205,7 +227,7 @@ func EffectiveSettings(cfg config.TelemetryConfig, configPath string) Settings {
 		MaxEventFileBytes:   maxEventFileBytes,
 		MaxEventFiles:       maxEventFiles,
 		RetentionDays:       retentionDays,
-		CaptureQueryPreview: cfg.CaptureQueryPreview,
+		CaptureQueryPreview: captureQueryPreview,
 		QueryPreviewChars:   queryPreviewChars,
 	}
 }
@@ -731,6 +753,32 @@ func (r *Recorder) PrepareQueryEvent(event *Event, query string) {
 	event.QueryHash = hash
 	event.QueryLength = length
 	event.QueryPreview = preview
+}
+
+// PrepareRecallHits attaches a bounded snapshot of recalled hits to the event.
+// Hit text previews follow the same privacy gate as query previews.
+func (r *Recorder) PrepareRecallHits(event *Event, hits []memory.MemoryHit) {
+	if r == nil || len(hits) == 0 {
+		return
+	}
+	detailed := hits
+	if len(detailed) > maxRecallHitDetails {
+		detailed = detailed[:maxRecallHitDetails]
+	}
+	event.RecallHits = make([]RecallHit, 0, len(detailed))
+	for _, hit := range detailed {
+		detail := RecallHit{
+			Provider:  hit.Provider,
+			ID:        hit.ID,
+			Score:     hit.Score,
+			Relevance: hit.Relevance,
+			Tier:      string(memory.EffectiveHitTier(hit)),
+		}
+		if r.settings.CaptureQueryPreview {
+			detail.TextPreview = truncateRunes(strings.TrimSpace(hit.Text), recallHitPreviewRunes)
+		}
+		event.RecallHits = append(event.RecallHits, detail)
+	}
 }
 
 func (r *Recorder) loadMetrics() (Metrics, error) {

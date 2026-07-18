@@ -141,7 +141,7 @@ func (r runner) shutdownHookDaemonFunc() shutdownHookDaemonFunc {
 }
 
 func (r runner) loadRuntime() (config.Config, *paxruntime.Runtime, error) {
-	rt, err := paxruntime.Load(r.configFile())
+	rt, err := paxruntime.LoadWithClock(r.configFile(), r.nowTime)
 	if err != nil {
 		return config.Config{}, nil, err
 	}
@@ -170,6 +170,7 @@ func (r runner) printHelp() {
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] remember --profile stm|ltm --text TEXT")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] history [--days N] [--json]")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] logs [--tail N] [--follow] [--json]")
+	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] dashboard [--addr 127.0.0.1:PORT] [--days N]")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill scan --agent AGENT [--before TIME]")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill run --agent AGENT --provider NAME [--background]")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] backfill status --agent AGENT --provider NAME")
@@ -181,4 +182,25 @@ func (r runner) printHelp() {
 	_, _ = fmt.Fprintln(r.stdout, "  paxm update [--check] [--version VERSION]")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm [--config PATH] config doctor")
 	_, _ = fmt.Fprintln(r.stdout, "  paxm version")
+}
+
+func extractConfigFlag(args []string) ([]string, string, error) {
+	var filtered []string
+	var configPath string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--config" || arg == "-c":
+			if i+1 >= len(args) {
+				return nil, "", fmt.Errorf("%s requires a path", arg)
+			}
+			configPath = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--config="):
+			configPath = strings.TrimPrefix(arg, "--config=")
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	return filtered, configPath, nil
 }

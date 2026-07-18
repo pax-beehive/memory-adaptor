@@ -24,6 +24,7 @@ type Service struct {
 	cfg    config.Config
 	router *memory.Router
 	tools  *tools.Engine
+	clock  memory.Clock
 }
 
 type RecallInput = tools.RecallInput
@@ -61,8 +62,21 @@ type HookResult struct {
 }
 
 func New(cfg config.Config, router *memory.Router) *Service {
+	return NewWithClock(cfg, router, nil)
+}
+
+// NewWithClock is New with an injectable clock shared by the facade and its
+// tools engine for deterministic timestamps.
+func NewWithClock(cfg config.Config, router *memory.Router, clock memory.Clock) *Service {
 	normalized := config.Normalize(cfg)
-	return &Service{cfg: normalized, router: router, tools: tools.New(normalized, router)}
+	return &Service{cfg: normalized, router: router, tools: tools.NewWithClock(normalized, router, clock), clock: clock}
+}
+
+func (s *Service) nowUTC() time.Time {
+	if s.clock != nil {
+		return s.clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (s *Service) Tools() *tools.Engine { return s.tools }
@@ -89,35 +103,6 @@ func (s *Service) IngestBatchToProvider(ctx context.Context, provider string, in
 
 func (s *Service) CleanupExpired(ctx context.Context, limit int) (memory.CleanupExpiredResult, error) {
 	return s.tools.CleanupExpired(ctx, limit)
-}
-
-func memoryItemFromIngestInput(input IngestInput) (memory.MemoryItem, string, bool) {
-	text := strings.TrimSpace(input.Text)
-	if text == "" {
-		return memory.MemoryItem{}, "", false
-	}
-	profile := input.Profile
-	if strings.TrimSpace(profile) == "" {
-		profile = "default"
-	}
-	return memory.MemoryItem{
-		ID:            input.ID,
-		Text:          text,
-		AdmissionText: input.AdmissionText,
-		Source:        input.Source,
-		Metadata:      input.Metadata,
-		CreatedAt:     effectiveCreatedAt(input.CreatedAt),
-		Tier:          input.Tier,
-		ExpiresAt:     input.ExpiresAt,
-		Turn:          input.Turn,
-	}, profile, true
-}
-
-func effectiveCreatedAt(value time.Time) time.Time {
-	if value.IsZero() {
-		return time.Now().UTC()
-	}
-	return value.UTC()
 }
 
 func (s *Service) RunHook(ctx context.Context, event HookEvent) (HookResult, error) {
@@ -271,7 +256,7 @@ func (s *Service) HookWriteItem(event HookEvent) (IngestInput, bool, error) {
 		return IngestInput{}, false, err
 	}
 	input.Tier = policy.Tier
-	input.CreatedAt = time.Now().UTC()
+	input.CreatedAt = s.nowUTC()
 	if policy.ExpiresAfter > 0 {
 		expiresAt := input.CreatedAt.Add(policy.ExpiresAfter)
 		input.ExpiresAt = &expiresAt
