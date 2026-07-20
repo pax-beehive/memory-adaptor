@@ -355,7 +355,7 @@ telemetry:
   max_event_file_bytes: 1048576
   max_event_files: 3
   retention_days: 30
-  capture_query_preview: true
+  capture_query_preview: false
   query_preview_chars: 80
 ```
 
@@ -917,12 +917,11 @@ are not exposed by `paxm mcp serve`.
 
 Privacy:
 
-- Query text previews are stored by default (`capture_query_preview: true`),
-  capped by `query_preview_chars`, alongside the query length and SHA-256 hash
-  prefix. The same switch also controls recalled-memory text previews (capped
-  at 160 characters) on recall events, which `paxm dashboard` uses for manual
-  recall-quality inspection. Set it to `false` to store only lengths, hashes,
-  counts, and scores.
+- Query text previews are off by default (`capture_query_preview: false`):
+  events store only the query length and SHA-256 hash prefix. Setting it to
+  `true` additionally stores a query preview capped by `query_preview_chars`
+  and recalled-memory text previews (capped at 160 characters) on recall
+  events, which `paxm dashboard` uses for manual recall-quality inspection.
 - All telemetry stays local and is bounded by `max_event_file_bytes` and
   `max_event_files`.
 - `paxm dashboard` serves these events on a loopback-only web view; keep its
