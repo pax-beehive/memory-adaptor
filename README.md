@@ -338,7 +338,11 @@ so an agent cannot silently take ownership of user configuration.
 Writes carry user, agent, and named personal/team scope provenance. Recall does
 not filter by that scope: CLI, MCP, and passive injection label every result
 with its source scope, while provider-native routing and ACL remain under the
-provider's control.
+provider's control. Active CLI calls derive a stable session identity from the
+configured user, config path, and current workspace. An MCP server creates one
+session identity at startup and reuses it for that server lifetime. Paxm passes
+these values as runtime recall context and structured write provenance, never
+as provider search filters.
 
 ## Agent integrations
 

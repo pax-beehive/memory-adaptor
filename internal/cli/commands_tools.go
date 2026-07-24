@@ -85,7 +85,9 @@ func (r runner) runRecall(args []string) error {
 	}
 	defer func() { _ = rt.Close() }()
 	started := time.Now()
-	result, err := rt.Tools.Recall(context.Background(), tools.RecallInput{Query: q, Profile: *profile, Limit: *limit})
+	result, err := rt.Tools.Recall(context.Background(), tools.RecallInput{
+		Query: q, Profile: *profile, Limit: *limit, SessionID: rt.ActiveCLISessionID(),
+	})
 	r.recordRecallTelemetry(cfg, "recall", "cli", "", "", paxruntime.EffectiveRecallProfile(cfg, *profile), firstNonEmpty(result.Query, q), result, false, time.Since(started), err)
 	if err != nil {
 		return err
@@ -122,7 +124,10 @@ func (r runner) runRemember(args []string) error {
 	}
 	defer func() { _ = rt.Close() }()
 	started := time.Now()
-	result, err := rt.Tools.Remember(context.Background(), tools.RememberInput{Text: value, Profile: *profile, Source: *source})
+	result, err := rt.Tools.Remember(context.Background(), tools.RememberInput{
+		Text: value, Profile: *profile, Source: *source,
+		SessionID: rt.ActiveCLISessionID(),
+	})
 	r.recordRememberTelemetry(cfg, "remember", "cli", paxruntime.EffectiveWriteProfile(*profile), 1, result, time.Since(started), err)
 	if err != nil {
 		return err

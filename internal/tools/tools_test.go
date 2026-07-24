@@ -12,18 +12,26 @@ import (
 	"github.com/pax-beehive/paxm/internal/memory"
 )
 
-func TestRememberInputDoesNotExposeInternalTurnContext(t *testing.T) {
+func TestToolInputsDoNotExposeInternalSessionContext(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(RememberInput{
-		Text: "internal boundary",
-		Turn: &memory.TurnContext{SessionID: "session", TurnID: "turn"},
+	rememberData, err := json.Marshal(RememberInput{
+		Text:      "internal boundary",
+		Turn:      &memory.TurnContext{SessionID: "session", TurnID: "turn"},
+		SessionID: "active-session",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(data, []byte("paxm_turn")) || bytes.Contains(data, []byte("session")) {
-		t.Fatalf("internal turn context leaked into agent-facing JSON: %s", data)
+	if bytes.Contains(rememberData, []byte("paxm_turn")) || bytes.Contains(rememberData, []byte("session")) {
+		t.Fatalf("internal session context leaked into remember JSON: %s", rememberData)
+	}
+	recallData, err := json.Marshal(RecallInput{Query: "internal boundary", SessionID: "active-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(recallData, []byte("session")) {
+		t.Fatalf("internal session context leaked into recall JSON: %s", recallData)
 	}
 }
 
@@ -118,8 +126,11 @@ func TestRememberAppliesConfiguredProvenanceAndRejectsMetadataSpoofing(t *testin
 
 	engine := New(cfg, router)
 	_, err = engine.Remember(context.Background(), RememberInput{
-		Text: "team decision", Profile: "ltm", AgentName: "codex",
-		Metadata: map[string]string{memory.MetadataUserID: "mallory", memory.MetadataScopeID: "other"},
+		Text: "team decision", Profile: "ltm", AgentName: "codex", SessionID: "active-session",
+		Metadata: map[string]string{
+			memory.MetadataUserID: "mallory", memory.MetadataScopeID: "other",
+			"session_id": "caller-spoof",
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +138,15 @@ func TestRememberAppliesConfiguredProvenanceAndRejectsMetadataSpoofing(t *testin
 	want := memory.Provenance{UserID: "todd", AgentID: "codex-todd", ScopeType: "team", ScopeID: "pax"}
 	if provider.item.Provenance != want || memory.ProvenanceFromMetadata(provider.item.Metadata) != want {
 		t.Fatalf("provenance = %#v metadata=%#v", provider.item.Provenance, provider.item.Metadata)
+	}
+	if provider.item.Origin.SessionID != "active-session" || provider.item.Metadata[memory.MetadataSessionID] != "active-session" {
+		t.Fatalf("session origin = %#v metadata=%#v", provider.item.Origin, provider.item.Metadata)
+	}
+	if provider.item.Metadata["session_id"] != "" {
+		t.Fatalf("caller session_id leaked into provider metadata: %#v", provider.item.Metadata)
+	}
+	if provider.item.Turn != nil {
+		t.Fatalf("active session was misrepresented as turn context: %#v", provider.item.Turn)
 	}
 }
 
@@ -226,9 +246,10 @@ func TestRecallPassesExplicitFiltersButNotRuntimeMetadata(t *testing.T) {
 	}
 	engine := New(config.DefaultConfig("config.yaml"), router)
 	_, err = engine.Recall(context.Background(), RecallInput{
-		Query:   "deploy",
-		Meta:    map[string]string{"session_id": "s-1", "source": "opencode"},
-		Filters: map[string]string{"workspace": "/repo"},
+		Query:     "deploy",
+		SessionID: "s-1",
+		Meta:      map[string]string{"source": "opencode"},
+		Filters:   map[string]string{"workspace": "/repo"},
 	})
 	if err != nil {
 		t.Fatal(err)

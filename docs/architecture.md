@@ -195,6 +195,14 @@ telemetry paths as the CLI, so recall/write policy remains entirely in
 user-owned paxm config. Setup, uninstall, hook installation, routing changes,
 and backfill remain operator capabilities and are not MCP tools.
 
+Active CLI and MCP calls carry a trusted runtime session identity even when the
+caller does not supply metadata. CLI identity is stable for the configured
+user, config path, and current workspace. MCP creates one identity at server
+startup and reuses it until that server exits. The tools layer maps this value
+to recall metadata for provider runtime context and to `MemoryOrigin` for
+writes. It never maps session identity into provider search filters or invents
+a turn boundary for an explicit write.
+
 ## Write Profiles
 
 A write profile is the policy boundary for writes. It chooses:

@@ -106,6 +106,23 @@ func TestConfigFileTable(t *testing.T) {
 	}
 }
 
+func TestStableActiveSessionIDScopesWorkspace(t *testing.T) {
+	t.Parallel()
+
+	first := stableActiveSessionID("cli", "todd", "/config/paxm.yaml", "/workspace/one")
+	repeated := stableActiveSessionID("cli", "todd", "/config/paxm.yaml", "/workspace/one")
+	otherWorkspace := stableActiveSessionID("cli", "todd", "/config/paxm.yaml", "/workspace/two")
+	if first != repeated {
+		t.Fatalf("stable session changed: %q != %q", first, repeated)
+	}
+	if first == otherWorkspace {
+		t.Fatalf("workspace-scoped sessions collapsed: %q", first)
+	}
+	if !strings.HasPrefix(first, "paxm-cli-") {
+		t.Fatalf("session ID = %q, want paxm-cli prefix", first)
+	}
+}
+
 func TestTelemetryProfileAndRouteHelpersTable(t *testing.T) {
 	cfg := telemetryTestConfig()
 
