@@ -56,6 +56,132 @@ func TestEvalProviderJSONRPCPublicCommand(t *testing.T) {
 	}
 }
 
+func TestCLIActiveToolsSupplyStableSessionIdentity(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	sessionPath := filepath.Join(t.TempDir(), "session-id")
+	cfg := config.DefaultConfig(configPath)
+	cfg.Providers["sqlite"] = config.ProviderConfig{Type: "sqlite", Enabled: false}
+	cfg.Providers["team"] = config.ProviderConfig{
+		Type:      "jsonrpc",
+		Enabled:   true,
+		Transport: "stdio",
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestCLIActiveSessionProviderHelper", "--"},
+		Env: map[string]string{
+			"PAXM_CLI_ACTIVE_SESSION_HELPER": "1",
+			"PAXM_CLI_ACTIVE_SESSION_FILE":   sessionPath,
+		},
+		Timeout: "5s",
+	}
+	recall := cfg.RecallProfiles["default"]
+	recall.Providers = []config.ProviderRouteConfig{{Name: "team", Required: true}}
+	cfg.RecallProfiles["default"] = recall
+	write := cfg.WriteProfiles["default"]
+	write.Providers = []config.ProviderRouteConfig{{Name: "team", Required: true}}
+	cfg.WriteProfiles["default"] = write
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Main([]string{"--config", configPath, "remember", "--text", "stable active session", "--json"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("remember exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var remembered tools.RememberResult
+	if err := json.Unmarshal(stdout.Bytes(), &remembered); err != nil {
+		t.Fatal(err)
+	}
+	if len(remembered.ProviderErrors) != 0 || len(remembered.Refs) != 1 || remembered.Refs[0].Provider != "team" {
+		t.Fatalf("unexpected remember result: %#v", remembered)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Main([]string{"--config", configPath, "recall", "--query", "stable active session", "--json"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("recall exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var recalled recallJSONOutput
+	if err := json.Unmarshal(stdout.Bytes(), &recalled); err != nil {
+		t.Fatal(err)
+	}
+	if len(recalled.ProviderErrors) != 0 || len(recalled.Hits) != 1 || recalled.Hits[0].Provider != "team" {
+		t.Fatalf("unexpected recall result: %#v", recalled)
+	}
+	if len(recalled.ProviderRecalls) != 1 || recalled.ProviderRecalls[0].Provider != "team" || recalled.ProviderRecalls[0].Outcome != memory.ProviderRecallSuccess {
+		t.Fatalf("unexpected provider recall outcome: %#v", recalled.ProviderRecalls)
+	}
+}
+
+func TestCLIActiveSessionProviderHelper(t *testing.T) {
+	if os.Getenv("PAXM_CLI_ACTIVE_SESSION_HELPER") != "1" {
+		return
+	}
+	var request struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params"`
+	}
+	if err := json.NewDecoder(os.Stdin).Decode(&request); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := os.Getenv("PAXM_CLI_ACTIVE_SESSION_FILE")
+	var result any
+	switch request.Method {
+	case "paxm.putBatch":
+		var batch struct {
+			Items []memory.MemoryItem `json:"items"`
+		}
+		if err := json.Unmarshal(request.Params, &batch); err != nil {
+			t.Fatal(err)
+		}
+		if len(batch.Items) != 1 {
+			t.Fatalf("putBatch items = %d, want 1", len(batch.Items))
+		}
+		sessionID := strings.TrimSpace(batch.Items[0].Origin.SessionID)
+		if sessionID == "" {
+			t.Fatal("put origin.session_id is required")
+		}
+		if batch.Items[0].Metadata["session_id"] != "" {
+			t.Fatalf("runtime session leaked as raw metadata: %#v", batch.Items[0].Metadata)
+		}
+		if err := os.WriteFile(sessionPath, []byte(sessionID), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		result = map[string]any{"refs": []map[string]string{{"id": "team-memory-1"}}}
+	case "paxm.search":
+		var query memory.SearchQuery
+		if err := json.Unmarshal(request.Params, &query); err != nil {
+			t.Fatal(err)
+		}
+		sessionID := strings.TrimSpace(query.Metadata["session_id"])
+		if sessionID == "" {
+			t.Fatal("search metadata.session_id is required")
+		}
+		written, err := os.ReadFile(sessionPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sessionID != string(written) {
+			t.Fatalf("search session_id = %q, want stable %q", sessionID, written)
+		}
+		result = map[string]any{"hits": []memory.MemoryHit{{
+			ID: "team-memory-1", Text: "stable active session", Relevance: 1, Score: 1,
+		}}}
+	case "paxm.health":
+		result = map[string]any{"ok": true}
+	default:
+		t.Fatalf("unexpected method %q", request.Method)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      request.ID,
+		"result":  result,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEvalReportIncludesConversationWriteMetrics(t *testing.T) {
 	var output bytes.Buffer
 	writeEvalReport(&output, paxeval.Result{

@@ -123,6 +123,12 @@ Cursor、TRAE、TRAE CN、Kimi Code、ZCode、Kiro 和 Cline 也可以直接在
 各自的 session-start 事件；OpenCode 会在该 session 的第一条消息前完成同样的
 bootstrap。
 
+主动 CLI 和 MCP 调用即使没有由调用方提供 metadata，也会携带受信任的 runtime
+session 身份。CLI 根据当前 user、配置路径和 workspace 生成稳定身份；MCP server
+启动时生成一次，并在该 server 生命周期内复用。召回时它只作为 provider runtime
+context，写入时进入结构化 `MemoryOrigin`，不会成为 provider 搜索过滤条件，也不会
+把一次显式写入伪装成 turn。
+
 写入 provider 的 memory 还会带有 `turn_id`（如果当前事件有 turn）以及写入
 profile 的 `scope`。因此一次记忆可以同时回答“谁产生了它”和“它属于哪个可见
 范围”。召回结果会尽量保留这些 metadata；provider adapter 负责把 provider 的

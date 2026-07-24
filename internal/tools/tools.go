@@ -11,10 +11,11 @@ import (
 )
 
 type RecallInput struct {
-	Query   string            `json:"query"`
-	Profile string            `json:"profile,omitempty"`
-	Limit   int               `json:"limit,omitempty"`
-	Meta    map[string]string `json:"meta,omitempty"`
+	Query     string            `json:"query"`
+	Profile   string            `json:"profile,omitempty"`
+	Limit     int               `json:"limit,omitempty"`
+	Meta      map[string]string `json:"meta,omitempty"`
+	SessionID string            `json:"-"`
 	// Filters is the only field providers translate into store-native search
 	// filters. Meta stays runtime/diagnostic context and never filters.
 	Filters map[string]string `json:"filters,omitempty"`
@@ -37,6 +38,7 @@ type RememberInput struct {
 	Tier          memory.MemoryTier   `json:"tier,omitempty"`
 	ExpiresAt     *time.Time          `json:"expires_at,omitempty"`
 	Turn          *memory.TurnContext `json:"-"`
+	SessionID     string              `json:"-"`
 	AgentName     string              `json:"agent_name,omitempty"`
 }
 type RememberResult struct {
@@ -86,7 +88,11 @@ func (s *Engine) Recall(ctx context.Context, input RecallInput) (RecallResult, e
 	if err != nil {
 		return RecallResult{}, err
 	}
-	value, err := s.router.SearchWithPolicy(ctx, memory.SearchQuery{Text: query, Metadata: memory.WithoutProvenanceMetadata(input.Meta), Filters: input.Filters}, policy)
+	metadata := memory.WithoutProvenanceMetadata(input.Meta)
+	if sessionID := strings.TrimSpace(input.SessionID); sessionID != "" {
+		metadata["session_id"] = sessionID
+	}
+	value, err := s.router.SearchWithPolicy(ctx, memory.SearchQuery{Text: query, Metadata: metadata, Filters: input.Filters}, policy)
 	result := RecallResult{Query: query, Hits: value.Hits, ProviderErrors: value.ProviderErrors, ProviderRecalls: value.ProviderRecalls}
 	if errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		result.TimedOut = true
@@ -209,7 +215,21 @@ func (s *Engine) itemFromInput(input RememberInput) (memory.MemoryItem, string, 
 	} else {
 		created = created.UTC()
 	}
-	return memory.MemoryItem{ID: input.ID, Text: text, AdmissionText: input.AdmissionText, Source: input.Source, Metadata: input.Metadata, CreatedAt: created, Tier: input.Tier, ExpiresAt: input.ExpiresAt, Turn: input.Turn}, profile, true
+	metadata := input.Metadata
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID != "" {
+		metadata = make(map[string]string, len(input.Metadata))
+		for key, value := range input.Metadata {
+			if key != "session_id" {
+				metadata[key] = value
+			}
+		}
+	}
+	return memory.MemoryItem{
+		ID: input.ID, Text: text, AdmissionText: input.AdmissionText, Source: input.Source,
+		Metadata: metadata, CreatedAt: created, Tier: input.Tier, ExpiresAt: input.ExpiresAt,
+		Turn: input.Turn, Origin: memory.MemoryOrigin{SessionID: sessionID},
+	}, profile, true
 }
 func (s *Engine) searchPolicy(name string, limit int) (memory.SearchPolicy, error) {
 	if strings.TrimSpace(name) == "" {

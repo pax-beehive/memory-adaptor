@@ -36,6 +36,7 @@ type Server struct {
 	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
+	sessionID  string
 
 	// rt caches the loaded runtime so each tool call does not reopen every
 	// provider (and leak a SQLite handle). It is rebuilt when the config file
@@ -73,6 +74,7 @@ func NewServer(opts Options) *Server {
 		stdin:      stdin,
 		stdout:     stdout,
 		stderr:     stderr,
+		sessionID:  paxruntime.NewActiveSessionID("mcp"),
 	}
 }
 
@@ -359,10 +361,11 @@ func (s *Server) callRecall(ctx context.Context, raw json.RawMessage) toolResult
 	}
 	started := time.Now()
 	result, opErr := rt.Tools.Recall(ctx, tools.RecallInput{
-		Query:   args.Query,
-		Profile: args.Profile,
-		Limit:   limit,
-		Meta:    args.Meta,
+		Query:     args.Query,
+		Profile:   args.Profile,
+		Limit:     limit,
+		Meta:      args.Meta,
+		SessionID: s.sessionID,
 	})
 	if err := s.recordRecall(rt, args.Profile, firstNonEmpty(result.Query, args.Query), result, time.Since(started), opErr); err != nil {
 		_, _ = fmt.Fprintf(s.stderr, "paxm telemetry skipped: %s\n", err)
@@ -404,6 +407,7 @@ func (s *Server) callRemember(ctx context.Context, raw json.RawMessage) toolResu
 		Profile:   args.Profile,
 		Source:    source,
 		Metadata:  args.Metadata,
+		SessionID: s.sessionID,
 		AgentName: s.agentName,
 	})
 	if err := s.recordRemember(rt, args.Profile, 1, result, time.Since(started), opErr); err != nil {
