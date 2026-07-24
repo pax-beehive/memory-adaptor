@@ -401,10 +401,14 @@ event mappings, profile settings, and uninstall behavior.
 Historical imports are also resumable:
 
 ```bash
-paxm backfill scan --agent codex --before 2026-07-09
-paxm backfill run --agent codex --provider mem0-company --background
+paxm backfill scan --agent codex --after 2026-07-21
+paxm backfill run --agent codex --provider mem0-company --after 2026-07-21 --background
 paxm backfill status --agent codex --provider mem0-company
 ```
+
+`--after` is inclusive and `--before` is exclusive. Supplying `--after`
+without `--before` intentionally scans through the latest session history,
+including turns after passive capture was enabled.
 
 ## Performance
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,9 +66,11 @@ func WithClock(clock Clock) RouterOption {
 }
 
 type Router struct {
-	providers []ProviderBinding
-	byName    map[string]ProviderBinding
-	clock     Clock
+	providers        []ProviderBinding
+	byName           map[string]ProviderBinding
+	clock            Clock
+	sequenceMu       sync.Mutex
+	sessionSequences map[string]int64
 }
 
 func (r *Router) nowUTC() time.Time {
@@ -110,7 +113,7 @@ func NewRouter(providers []ProviderBinding, opts ...RouterOption) (*Router, erro
 		byName[name] = binding
 		normalized = append(normalized, binding)
 	}
-	router := &Router{providers: normalized, byName: byName}
+	router := &Router{providers: normalized, byName: byName, sessionSequences: map[string]int64{}}
 	for _, opt := range opts {
 		opt(router)
 	}
@@ -407,8 +410,35 @@ func (r *Router) PutBatchWithPolicy(ctx context.Context, items []MemoryItem, pol
 	for i := range items {
 		items[i] = PrepareProviderItem(items[i])
 	}
+	r.assignSessionSequences(items)
 	items = admitLongTermMemories(items, now)
 	return collectPutResponses(putProviders(ctx, writable, items))
+}
+
+func (r *Router) assignSessionSequences(items []MemoryItem) {
+	r.sequenceMu.Lock()
+	defer r.sequenceMu.Unlock()
+	for index := range items {
+		item := &items[index]
+		if strings.TrimSpace(item.Metadata[MetadataSequence]) != "" {
+			continue
+		}
+		sessionID := strings.TrimSpace(item.Origin.SessionID)
+		if sessionID == "" {
+			continue
+		}
+		sequence := item.CreatedAt.UTC().UnixNano()
+		if sequence < 1 {
+			sequence = 1
+		}
+		if previous := r.sessionSequences[sessionID]; sequence <= previous {
+			sequence = previous + 1
+		}
+		metadata := cloneMetadata(item.Metadata)
+		metadata[MetadataSequence] = strconv.FormatInt(sequence, 10)
+		item.Metadata = metadata
+		r.sessionSequences[sessionID] = sequence
+	}
 }
 
 func (r *Router) writableBindings(policy PutPolicy) ([]ProviderBinding, error) {

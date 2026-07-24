@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -49,12 +50,14 @@ func (*blockingProvider) Health(context.Context) error { return nil }
 
 type providerStub struct {
 	item  memory.MemoryItem
+	items []memory.MemoryItem
 	query memory.SearchQuery
 }
 
 func (*providerStub) Name() string { return "sqlite" }
 func (p *providerStub) Put(_ context.Context, item memory.MemoryItem) (memory.MemoryRef, error) {
 	p.item = item
+	p.items = append(p.items, item)
 	return memory.MemoryRef{Provider: "sqlite", ID: "one"}, nil
 }
 func (p *providerStub) Search(_ context.Context, query memory.SearchQuery) ([]memory.MemoryHit, error) {
@@ -233,6 +236,39 @@ func TestRememberUsesInjectedClockForDefaultCreatedAt(t *testing.T) {
 	}
 	if !provider.item.CreatedAt.Equal(fixed) {
 		t.Fatalf("created_at = %v, want injected clock %v", provider.item.CreatedAt, fixed)
+	}
+}
+
+func TestRememberAssignsMonotonicSequenceWithinSession(t *testing.T) {
+	t.Parallel()
+
+	provider := &providerStub{}
+	router, err := memory.NewRouter([]memory.ProviderBinding{{Provider: provider, Write: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := time.Date(2026, 7, 24, 12, 0, 0, 123, time.UTC)
+	engine := New(config.DefaultConfig("config.yaml"), router)
+	for _, text := range []string{"first", "second"} {
+		if _, err := engine.Remember(context.Background(), RememberInput{
+			Text: text, SessionID: "same-session", CreatedAt: fixed,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(provider.items) != 2 {
+		t.Fatalf("writes = %d, want 2", len(provider.items))
+	}
+	first, err := strconv.ParseInt(provider.items[0].Metadata["sequence"], 10, 64)
+	if err != nil {
+		t.Fatalf("first sequence = %q: %v", provider.items[0].Metadata["sequence"], err)
+	}
+	second, err := strconv.ParseInt(provider.items[1].Metadata["sequence"], 10, 64)
+	if err != nil {
+		t.Fatalf("second sequence = %q: %v", provider.items[1].Metadata["sequence"], err)
+	}
+	if second <= first {
+		t.Fatalf("sequences = %d, %d; want increasing values", first, second)
 	}
 }
 
